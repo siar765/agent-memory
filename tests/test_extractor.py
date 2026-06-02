@@ -111,17 +111,23 @@ class TestParseResponse:
 
     def test_non_list_response(self):
         content = '{"type": "preference", "content": "Not a list"}'
-        facts = self.extractor._parse_response(content)
-        assert len(facts) == 0
+        import pytest
+        from agent_memory.extractor import ParseError
+        with pytest.raises(ParseError):
+            self.extractor._parse_response(content)
 
     def test_garbage_input(self):
-        facts = self.extractor._parse_response("not json at all {{{")
-        assert len(facts) == 0
+        import pytest
+        from agent_memory.extractor import ParseError
+        with pytest.raises(ParseError):
+            self.extractor._parse_response("not json at all {{{")
 
     def test_valid_json_but_not_array(self):
         content = '{"key": "value"}'
-        facts = self.extractor._parse_response(content)
-        assert len(facts) == 0
+        import pytest
+        from agent_memory.extractor import ParseError
+        with pytest.raises(ParseError):
+            self.extractor._parse_response(content)
 
 
 class TestExtractMethod:
