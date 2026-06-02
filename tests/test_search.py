@@ -169,6 +169,26 @@ class TestInjectSummary:
             assert "Global CLI preference" in summary2
             assert "NAS port 443" not in summary2  # other project excluded
 
+    def test_inject_project_without_scope_auto_includes_global(self):
+        """inject_summary(project='blog') without scope should auto-merge global."""
+        with tempfile.TemporaryDirectory() as tmp:
+            searcher, store = _make_search(tmp)
+            store.save([
+                AtomicFact(type=FactType.PREFERENCE, content="Global preference", confidence=1.0, scope="global"),
+                AtomicFact(type=FactType.DECISION, content="Blog project fact", confidence=1.0, scope="project", project="blog"),
+                AtomicFact(type=FactType.ENVIRONMENT, content="NAS project fact", confidence=1.0, scope="project", project="nas"),
+            ])
+            # --project blog without --scope should merge project + global
+            summary = searcher.inject_summary(project="blog")
+            assert "Blog project fact" in summary
+            assert "Global preference" in summary
+            assert "NAS project fact" not in summary  # other project excluded
+
+            # --scope project --project blog should NOT include global
+            summary2 = searcher.inject_summary(scope="project", project="blog")
+            assert "Blog project fact" in summary2
+            assert "Global preference" not in summary2
+
     def test_accept_reject_proposed(self):
         """Accept and reject should work with the store directly."""
         with tempfile.TemporaryDirectory() as tmp:

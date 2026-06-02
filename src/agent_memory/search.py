@@ -258,9 +258,10 @@ class MemorySearch:
         don't leak through when the superseding fact happens to be
         filtered out.
 
-        When ``include_global`` is True and a project is specified, global
-        (scope="global") facts are merged with the project-specific ones.
-        This gives you project context + personal preferences in one shot.
+        When a project is specified without an explicit ``scope`` restriction,
+        global preferences are auto-merged — so ``inject --project blog``
+        gives you project context + personal preferences in one shot.
+        Use ``--scope project --project blog`` to exclude global facts.
 
         Args:
             limit: Maximum facts to include.
@@ -275,8 +276,12 @@ class MemorySearch:
         Returns:
             Formatted markdown string for system prompt injection, or empty string.
         """
-        # If include_global and a project is specified, load project + global
-        if include_global and project:
+        # Auto-include global when project is set but scope is not explicitly restricted.
+        # This makes `inject --project blog` give you project + global preferences
+        # without needing --include-global. Use --scope project to exclude global.
+        should_include_global = (project and not scope) or include_global
+
+        if should_include_global and project:
             project_facts = self.store.load(
                 date_from=date_from,
                 scope="project",

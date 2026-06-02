@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import tempfile
+import contextlib
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
@@ -38,6 +39,26 @@ except ImportError:
 
     def _unlock_file(f):
         pass
+
+
+@contextlib.contextmanager
+def _global_lock(lock_dir: Path):
+    """Protect the read-modify-write cycle in save/edit/delete/forget.
+
+    Uses a single `.write-lock` file in the data directory to serialize
+    concurrent write operations from multiple processes. Without this,
+    two concurrent save() calls can overwrite each other's additions.
+
+    Falls back to no-op when fcntl is unavailable (Windows/restricted).
+    """
+    lock_path = lock_dir / ".write-lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(lock_path, "w") as f:
+        _lock_file(f)
+        try:
+            yield
+        finally:
+            _unlock_file(f)
 
 
 # Secret patterns for pre-save redaction
@@ -157,14 +178,36 @@ class MemoryStore:
         # Serialize new facts
         lines = [json.dumps(f.to_dict(), ensure_ascii=False) for f in new_facts]
 
-        # Append to daily file with lock
-        if path.exists():
-            existing = path.read_text()
-            content = existing + ("\n" if existing and not existing.endswith("\n") else "") + "\n".join(lines) + "\n"
-        else:
-            content = "\n".join(lines) + "\n"
+        # Global write lock protects the read-modify-write cycle
+        # so concurrent save() calls don't overwrite each other
+        with _global_lock(self._atoms_dir):
+            # Re-check dedup under lock: another process may have written
+            # these IDs between our initial check and now
+            if path.exists():
+                for line in path.read_text().splitlines():
+                    line = line.strip()
+                    if line:
+                        try:
+                            existing_id = json.loads(line).get("id", "")
+                            if existing_id:
+                                self._dedup_index.add(existing_id)
+                        except json.JSONDecodeError:
+                            continue
 
-        _atomic_write(path, content)
+            new_facts = [f for f in facts if f.id not in self._dedup_index]
+            if not new_facts:
+                return 0
+
+            lines = [json.dumps(f.to_dict(), ensure_ascii=False) for f in new_facts]
+
+            # Append to daily file
+            if path.exists():
+                existing = path.read_text()
+                content = existing + ("\n" if existing and not existing.endswith("\n") else "") + "\n".join(lines) + "\n"
+            else:
+                content = "\n".join(lines) + "\n"
+
+            _atomic_write(path, content)
 
         for fact in new_facts:
             self._dedup_index.add(fact.id)
@@ -260,28 +303,29 @@ class MemoryStore:
             True if found and deleted, False if not found.
         """
         found = False
-        for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
-            lines = path.read_text().splitlines()
-            new_lines = []
-            for line in lines:
-                if not line.strip():
-                    continue
-                try:
-                    data = json.loads(line)
-                    if data.get("id") == fact_id:
-                        found = True
-                        continue  # skip this line
-                    new_lines.append(line)
-                except json.JSONDecodeError:
-                    new_lines.append(line)
+        with _global_lock(self._atoms_dir):
+            for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
+                lines = path.read_text().splitlines()
+                new_lines = []
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if data.get("id") == fact_id:
+                            found = True
+                            continue  # skip this line
+                        new_lines.append(line)
+                    except json.JSONDecodeError:
+                        new_lines.append(line)
 
-            if found:
-                content = "\n".join(new_lines)
-                if new_lines:
-                    content += "\n"
-                _atomic_write(path, content)
-                self._rebuild_index()
-                return True
+                if found:
+                    content = "\n".join(new_lines)
+                    if new_lines:
+                        content += "\n"
+                    _atomic_write(path, content)
+                    self._rebuild_index()
+                    return True
 
         return False
 
@@ -305,74 +349,75 @@ class MemoryStore:
         """
         from datetime import datetime, timezone
 
-        found = False
-        for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
-            lines = path.read_text().splitlines()
-            new_lines = []
-            for line in lines:
-                if not line.strip():
-                    continue
-                try:
-                    data = json.loads(line)
-                    if data.get("id") == fact_id:
-                        found = True
-                        identity_fields = {"content", "type", "scope", "project"}
-                        identity_changed = any(k in updates for k in identity_fields)
+        with _global_lock(self._atoms_dir):
+            found = False
+            for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
+                lines = path.read_text().splitlines()
+                new_lines = []
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        data = json.loads(line)
+                        if data.get("id") == fact_id:
+                            found = True
+                            identity_fields = {"content", "type", "scope", "project"}
+                            identity_changed = any(k in updates for k in identity_fields)
 
-                        if identity_changed:
-                            # --- Evolution chain: keep old fact as superseded ---
-                            # Step 1: Mark old fact as superseded
-                            old_status = data.get("status", "active")
-                            if old_status == "active":
-                                data["status"] = "superseded"
-                            new_lines.append(json.dumps(data, ensure_ascii=False))
+                            if identity_changed:
+                                # --- Evolution chain: keep old fact as superseded ---
+                                # Step 1: Mark old fact as superseded
+                                old_status = data.get("status", "active")
+                                if old_status == "active":
+                                    data["status"] = "superseded"
+                                new_lines.append(json.dumps(data, ensure_ascii=False))
 
-                            # Step 2: Build new fact with updates
-                            new_data = dict(data)  # copy old values
-                            new_data["id"] = ""  # will be recomputed
-                            new_data["supersedes"] = fact_id
-                            new_data["status"] = "active"
-                            new_data["created_at"] = datetime.now(timezone.utc).timestamp()
+                                # Step 2: Build new fact with updates
+                                new_data = dict(data)  # copy old values
+                                new_data["id"] = ""  # will be recomputed
+                                new_data["supersedes"] = fact_id
+                                new_data["status"] = "active"
+                                new_data["created_at"] = datetime.now(timezone.utc).timestamp()
 
-                            # Apply updates to new fact
-                            for key, value in updates.items():
-                                if key in ("type", "content", "evidence", "supersedes",
-                                           "source_date", "status", "scope", "project"):
-                                    new_data[key] = value
-                                elif key == "confidence":
-                                    new_data[key] = max(0.0, min(float(value), 1.0))
+                                # Apply updates to new fact
+                                for key, value in updates.items():
+                                    if key in ("type", "content", "evidence", "supersedes",
+                                               "source_date", "status", "scope", "project"):
+                                        new_data[key] = value
+                                    elif key == "confidence":
+                                        new_data[key] = max(0.0, min(float(value), 1.0))
 
-                            # Step 3: Compute new ID from updated identity fields
-                            tmp = AtomicFact(
-                                type=FactType(new_data["type"]),
-                                content=new_data["content"],
-                                scope=new_data.get("scope", "global"),
-                                project=new_data.get("project", ""),
-                            )
-                            new_data["id"] = tmp.id
+                                # Step 3: Compute new ID from updated identity fields
+                                tmp = AtomicFact(
+                                    type=FactType(new_data["type"]),
+                                    content=new_data["content"],
+                                    scope=new_data.get("scope", "global"),
+                                    project=new_data.get("project", ""),
+                                )
+                                new_data["id"] = tmp.id
 
-                            new_lines.append(json.dumps(new_data, ensure_ascii=False))
+                                new_lines.append(json.dumps(new_data, ensure_ascii=False))
+                            else:
+                                # --- Non-identity change: update in-place ---
+                                for key, value in updates.items():
+                                    if key in ("type", "content", "evidence", "supersedes",
+                                               "source_date", "status", "scope", "project"):
+                                        data[key] = value
+                                    elif key == "confidence":
+                                        data[key] = max(0.0, min(float(value), 1.0))
+                                new_lines.append(json.dumps(data, ensure_ascii=False))
                         else:
-                            # --- Non-identity change: update in-place ---
-                            for key, value in updates.items():
-                                if key in ("type", "content", "evidence", "supersedes",
-                                           "source_date", "status", "scope", "project"):
-                                    data[key] = value
-                                elif key == "confidence":
-                                    data[key] = max(0.0, min(float(value), 1.0))
-                            new_lines.append(json.dumps(data, ensure_ascii=False))
-                    else:
+                            new_lines.append(line)
+                    except json.JSONDecodeError:
                         new_lines.append(line)
-                except json.JSONDecodeError:
-                    new_lines.append(line)
 
-            if found:
-                content = "\n".join(new_lines)
-                if new_lines:
-                    content += "\n"
-                _atomic_write(path, content)
-                self._rebuild_index()
-                return True
+                if found:
+                    content = "\n".join(new_lines)
+                    if new_lines:
+                        content += "\n"
+                    _atomic_write(path, content)
+                    self._rebuild_index()
+                    return True
 
         return False
 
@@ -388,29 +433,30 @@ class MemoryStore:
         query_lower = query.lower()
         deleted = 0
 
-        for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
-            lines = path.read_text().splitlines()
-            new_lines = []
-            changed = False
-            for line in lines:
-                if not line.strip():
-                    continue
-                try:
-                    data = json.loads(line)
-                    content = (data.get("content", "") + " " + data.get("evidence", "")).lower()
-                    if query_lower in content:
-                        deleted += 1
-                        changed = True
+        with _global_lock(self._atoms_dir):
+            for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
+                lines = path.read_text().splitlines()
+                new_lines = []
+                changed = False
+                for line in lines:
+                    if not line.strip():
                         continue
-                    new_lines.append(line)
-                except json.JSONDecodeError:
-                    new_lines.append(line)
+                    try:
+                        data = json.loads(line)
+                        content = (data.get("content", "") + " " + data.get("evidence", "")).lower()
+                        if query_lower in content:
+                            deleted += 1
+                            changed = True
+                            continue
+                        new_lines.append(line)
+                    except json.JSONDecodeError:
+                        new_lines.append(line)
 
-            if changed:
-                content = "\n".join(new_lines)
-                if new_lines:
-                    content += "\n"
-                _atomic_write(path, content)
+                if changed:
+                    content = "\n".join(new_lines)
+                    if new_lines:
+                        content += "\n"
+                    _atomic_write(path, content)
 
         if deleted > 0:
             self._rebuild_index()

@@ -233,7 +233,7 @@ def cmd_inject(args: list[str]) -> None:
     parser.add_argument("--query", default="", help="Task context for relevance ranking")
     parser.add_argument("--all", action="store_true", help="Include non-active facts too")
     parser.add_argument("--include-global", action="store_true",
-                        help="Merge global preferences with project-specific facts")
+                        help="Also include global preferences (auto-enabled when --project is set without --scope)")
     opts = parser.parse_args(args)
 
     config = _build_config()
