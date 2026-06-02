@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-memory"
-version = "0.2.0"
+version = "0.3.0"
 description = "Structured atomic fact memory for LLM agents — typed, confidence-scored, evolution-tracked"
 readme = "README.md"
 requires-python = ">=3.10"

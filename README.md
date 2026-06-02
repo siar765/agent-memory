@@ -1,340 +1,185 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/siar765/agent-memory/main/docs/banner-dark.svg">
-  <img alt="agent-memory banner" src="https://raw.githubusercontent.com/siar765/agent-memory/main/docs/banner-light.svg">
-</picture>
 
-# agent-memory 🧠
+  <p align="center">
+    <img alt="agent-memory banner" src="https://raw.githubusercontent.com/siar765/agent-memory/main/docs/banner-light.svg#gh-light-mode-only">
+    <img alt="agent-memory banner" src="https://raw.githubusercontent.com/siar765/agent-memory/main/docs/banner-dark.svg#gh-dark-mode-only">
+  </p>
 
-**Structured atomic fact memory for LLM agents.**
+  <h3 align="center">Local-first, editable memory layer for personal AI agents</h3>
 
-Not another vector database. Not another "store everything" RAG pipeline.
-Agent-memory extracts **what matters** from conversations — typed, confidence-scored,
-evolution-tracked facts — and forgets the rest.
-
-<p align="center">
-  <a href="https://pypi.org/project/agent-memory/"><img src="https://img.shields.io/pypi/v/agent-memory?style=flat-square&color=blue" alt="PyPI"></a>
-  <a href="#"><img src="https://img.shields.io/pypi/pyversions/agent-memory?style=flat-square" alt="Python versions"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/siar765/agent-memory?style=flat-square" alt="License"></a>
-  <a href="https://github.com/siar765/agent-memory/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/siar765/agent-memory/test.yml?style=flat-square&label=tests" alt="Tests"></a>
-  <a href="https://github.com/siar765/agent-memory/stargazers"><img src="https://img.shields.io/github/stars/siar765/agent-memory?style=flat-square" alt="Stars"></a>
-  <a href="#"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Status"></a>
-  <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-blue?style=flat-square" alt="Security"></a>
-  <a href="DISCLAIMER.md"><img src="https://img.shields.io/badge/disclaimer-legal-lightgrey?style=flat-square" alt="Disclaimer"></a>
+  <p align="center">
+    <a href="LICENSE"><img src="https://img.shields.io/github/license/siar765/agent-memory?style=flat-square" alt="License"></a>
+    <a href="https://github.com/siar765/agent-memory/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/siar765/agent-memory/test.yml?style=flat-square&label=tests" alt="Tests"></a>
+    <a href="https://github.com/siar765/agent-memory/stargazers"><img src="https://img.shields.io/github/stars/siar765/agent-memory?style=flat-square" alt="Stars"></a>
+    <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-blue?style=flat-square" alt="Security"></a>
+    <a href="DISCLAIMER.md"><img src="https://img.shields.io/badge/disclaimer-legal-lightgrey?style=flat-square" alt="Disclaimer"></a>
+  </p>
 </p>
+
+Agent-memory is a local-first, editable, JSONL-based memory layer for personal AI agents. It extracts durable facts from conversations — preferences, environment constraints, decisions, rejected options, conventions, and lessons — then stores them as plain JSONL files you can inspect, edit, delete, grep, or back up.
+
+No vector database. No service to run. No hidden state. Every memory is a line in a text file.
 
 ---
 
-## Why agent-memory?
+## Why this exists
 
-Every LLM agent eventually hits the same wall: **context is finite, memory is infinite**.
+Most agent memory systems try to store everything and figure out relevance later. In practice this means:
 
-The standard approach — dump everything into the system prompt — works for about 3 turns.
-Then you're drowning in tokens, the model can't find what matters, and your agent
-degrades from "thoughtful assistant" to "repetitive query tool."
+- **Token bloat** — the system prompt grows until it hurts
+- **Black box** — you can't see what the agent remembers about you
+- **No correction** — wrong memories persist because you can't delete them
+- **Cross-project pollution** — work-related facts leak into personal context
 
 Agent-memory takes a different path:
 
-| Problem | How others solve it | How agent-memory solves it |
-|---------|-------------------|---------------------------|
-| What to remember | Everything (vector DB) or nothing | **LLM curates** — extracts only facts worth keeping |
-| How to organize | Embedding similarity | **6 typed categories** — preference, environment, decision, rejection, convention, lesson |
-| How accurate | Probabilistic (vectors) | **Confidence scores** 0.8-1.0 — only high-certainty facts get injected |
-| Facts changing | Overwrite or version hell | **Supersedes chain** — new facts link to what they replaced, only active facts injected |
+| Problem | Naive approach | Agent-memory |
+|---|---|---|
+| What to store | Everything (vector dump) | Only **durable, typed facts** worth remembering |
+| Facts changing | Overwrite or version hell | **Supersedes chain** — new facts link to what they replaced, inject filters out old ones |
 | Evidence trail | Gone after extraction | **Source evidence** preserved — every fact traces back to exact conversation text |
 | Token cost | O(entire history) per query | **O(atomic summary)** — injects only 1-2KB, not 50KB |
+| Correction | Can't delete wrong memories | **CLI: delete, edit, forget, redact** — full governance |
 
 ---
 
-## Quick Start
+## 6 fact types
+
+| Type | What it captures | Why you need it |
+|---|---|---|
+| `preference` 💡 | User likes, dislikes, habits, style | Agent stops asking "dark or light mode?" |
+| `environment` 🔧 | System constraints, network limits, config | Agent stops suggesting solutions that can't work here |
+| `decision` ✅ | Explicit choices, with rationale | Agent doesn't re-debate settled decisions |
+| `rejection_reason` ❌ | What was ruled out and why | Agent stops suggesting the same rejected option |
+| `convention` 📐 | Recurring patterns, team practices | Agent follows your project standards |
+| `lesson` 📝 | Mistakes, corrections, hard-won insights | Agent doesn't repeat your past failures |
+
+---
+
+## Install
 
 ```bash
 pip install git+https://github.com/siar765/agent-memory.git
-
-# Set your LLM API key (any OpenAI-compatible provider)
-export LLM_API_KEY="***"
 ```
 
-### Complex scenario: evolving preferences & lessons learned
+---
 
-This 4-turn conversation shows facts being established, contradicted, and evolved:
-
-```
-cat <<'EOF' | agent-memory extract
-User: I prefer Python for backend services. It's what I'm most productive with.
-Assistant: Got it, Python for backend.
---- One week later ---
-User: Actually, I've been trying Go for the new API service. Much better performance.
-Assistant: Noted the shift.
-User: And don't even suggest Node.js for anything serious. I tried it, the callback hell was unbearable.
-Assistant: Understood, avoid Node.js.
---- The next day ---
-User: Oh and one lesson — always pin your Python dependency versions. Broke production twice because I forgot.
-EOF
-
-# → Extracted 4 facts, saved 4 new
-# Confidence distribution: {'1.0': 1, '0.9': 1, '0.8': 2}
-# Type distribution: {'preference': 2, 'rejection_reason': 1, 'lesson': 1}
-```
-
-### Query-aware injection (key feature)
-
-When generating a system prompt, pass the current task for relevance ranking:
+## Quick start
 
 ```bash
-# Without context — global top facts
-agent-memory inject --limit 10
-# → Shows: Python preferred, Go tried, Node rejected, dependencies...
+# Export an API key
+export LLM_API_KEY="sk-..."  # any OpenAI-compatible provider
+export LLM_MODEL="gpt-4o-mini"
 
-# With task context — only what's relevant
-agent-memory inject --query "deploying a Node.js service"
-# → 🔧 [rejection_reason] 100% | Rejected Node.js due to callback hell
-# → 📝 [lesson] 100% | Always pin Python dependency versions
+# Extract facts from a conversation
+echo "User: I prefer CLI over GUI for everything." | agent-memory extract
 
-agent-memory inject --query "choosing a database"
-# → 💡 [preference] 100% | User prefers Python for backend services
-```
+# Extract with project scoping
+echo "User: We use PostgreSQL for this project." | agent-memory extract --scope project --project blog
 
-### Managing what's remembered
+# Generate injection summary for system prompt
+agent-memory inject
+agent-memory inject --query "deploy docker" --scope project --project blog
 
-```bash
-# List everything stored
+# Inspect stored facts
 agent-memory list
+agent-memory list --scope project --project blog
 
-# See detail
-agent-memory show pr:a1b2c3d4e5f6g7
-
-# Correct a mistake
-agent-memory edit pr:a1b2c3d4e5f6g7 --content "User strongly prefers Python for backend services" --confidence 1.0
-
-# Remove something
-agent-memory delete pr:a1b2c3d4e5f6g7
-
-# Bulk forget
-agent-memory forget --query "Node.js"
-
-# Redact sensitive evidence
-agent-memory redact en:x1y2z3w4v5u6t7
+# Manage facts
+agent-memory show pr:abc123def45678
+agent-memory delete pr:abc123def45678
+agent-memory edit pr:abc123def45678 --content "User prefers VS Code now"
+agent-memory forget --query "old information"
+agent-memory redact pr:abc123def45678  # mask evidence
 
 # Validate storage integrity
 agent-memory validate
-```
 
----
-
-## Architecture
-
-```
-┌─────────────────────────────────────────────────────┐
-│                   Conversation                        │
-└──────────┬──────────────────────────────────────────┘
-           │ stdin / file
-           ▼
-┌──────────────────┐     ┌──────────────────────────────┐
-│  FactExtractor   │────▶│  60+ few-shot examples       │
-│  (LLM + rules)   │     │  + type-specific validation  │
-└──────────────────┘     │  + confidence post-processing│
-           │             └──────────────────────────────┘
-           ▼  list[AtomicFact]
-┌──────────────────┐     ┌──────────────────────────────┐
-│   MemoryStore     │────▶│  JSONL files, fcntl lock     │
-│   (persistent)    │     │  CRUD: save/delete/edit      │
-└──────────────────┘     │  forget/validate/redact       │
-           │             └──────────────────────────────┘
-           ▼
-┌──────────────────┐     ┌──────────────────────────────┐
-│   MemorySearch    │────▶│  BM25 + keyword + type + date│
-│   (retrieval)     │     │  + confidence + recency      │
-└──────────────────┘     │  + active-only (no superseded)│
-           │             └──────────────────────────────┘
-           ▼
-┌──────────────────┐     ┌──────────────────────────────┐
-│  inject_summary()│────▶│  relevance * 0.45            │
-│  (for prompt)    │     │  + confidence * 0.2          │
-└──────────────────┘     │  + recency * 0.15            │
-                         │  + frequency * 0.1           │
-                         │  + type_priority * 0.1       │
-                         └──────────────────────────────┘
-```
-
-Key difference from v0.1: **inject is now query-aware**. Pass the current task context
-and only the most relevant active facts are included.
-
----
-
-## The 6 Fact Types
-
-Every fact is one of these. No more, no less — the set was designed from
-analyzing what agents actually need to remember across thousands of production turns.
-
-| Type | Icon | Purpose | Example |
-|------|------|---------|---------|
-| `preference` | 💡 | User likes, dislikes, habits | "User prefers CLI over GUI" |
-| `environment` | 🔧 | System constraints, facts | "Docker port 443 is blocked" |
-| `decision` | ✅ | Explicit choices | "Chose PostgreSQL over MySQL" |
-| `rejection_reason` | ❌ | Why options were ruled out | "Rejected MongoDB — too complex for single-user" |
-| `convention` | 📐 | Recurring patterns | "Projects use MIT license by default" |
-| `lesson` | 📝 | Things learned the hard way | "patch tool double-escapes JSON — use write_file instead" |
-
-See [DESIGN.md](docs/design.md) for detailed type boundaries, edge cases, and counter-examples
-(60+ few-shot examples in the extraction prompt itself).
-
----
-
-## API
-
-### Python
-
-```python
-from agent_memory import AtomicFact, FactType, MemoryConfig, FactExtractor, MemoryStore, MemorySearch
-
-# Configure
-config = MemoryConfig(
-    data_dir="~/.agent/memory",
-    llm_api_key="sk-...",
-    llm_model="gpt-4o-mini",
-)
-
-# Extract
-extractor = FactExtractor(config)
-facts = extractor.extract("User: I hate slow tools. Assistant: Noted.")
-
-# Store
-store = MemoryStore(config)
-saved = store.save(facts)  # 3 new facts saved
-
-# Search with BM25
-searcher = MemorySearch(store)
-results = searcher.search(query="slow", fact_type="preference")
-
-# Inject with task context — only relevant active facts
-summary = searcher.inject_summary(query="deploying to production", active_only=True)
-
-# Manage
-store.delete("pr:a1b2c3d4...")
-store.edit("pr:a1b2c3d4...", content="User prefers fast tools")
-store.forget("slow")  # bulk delete by keyword
-issues = store.validate()  # integrity check
-```
-
-### CLI
-
-```bash
-# Extract from file
-cat conversation.md | agent-memory extract
-
-# Search across all stored facts (with BM25 ranking)
-agent-memory search --query "network" --type environment
-agent-memory search --query "database choice" --no-bm25  # fallback to keyword
-
-# Inject for system prompt (task-aware ranking)
-agent-memory inject --limit 15 --query "deploying a Docker service"
-
-# Manage facts
-agent-memory list
-agent-memory show pr:a1b2c3d4e5f6g7
-agent-memory delete pr:a1b2c3d4e5f6g7
-agent-memory edit pr:a1b2c3d4e5f6g7 --content "updated text" --confidence 0.95
-agent-memory forget --query "old setting"
-agent-memory redact en:x1y2z3w4v5u6t7
-
-# Validate & inspect
-agent-memory validate
+# Storage stats
 agent-memory stats
 ```
 
 ---
 
-## Comparison
+## Real-world usage pattern
 
-| Feature | agent-memory v0.2 | mem0 | Graphiti | LangMem |
-|---------|:-----------------:|:----:|:--------:|:-------:|
-| Typed facts (6 categories) | ✅ | ❌ | ❌ | ❌ |
-| Confidence scores | ✅ | ❌ | ❌ | ❌ |
-| Evolution tracking (active-only inject) | ✅ | ❌ | ❌ | ❌ |
-| Evidence preservation | ✅ | ❌ | ❌ | ❌ |
-| Query-aware injection | ✅ | ❌ | ❌ | ❌ |
-| BM25 term-frequency search | ✅ | ❌ | ❌ | ❌ |
-| CRUD (delete/edit/forget) | ✅ | ❌ | ❌ | ❌ |
-| Rule-based post-processing on extraction | ✅ | ❌ | ❌ | ❌ |
-| Few-shot extraction (60+ examples) | ✅ | ❌ | ❌ | ❌ |
-| Storage validation | ✅ | ❌ | ❌ | ❌ |
-| Zero external dependencies | ✅ | ❌ | ❌ | ❌ |
-| Works offline (no API) | ✅* | ❌ | ❌ | ❌ |
-| Vector search | ❌ | ✅ | ✅ | ✅ |
-| Graph traversal | ❌ | ❌ | ✅ | ❌ |
+```
+# 1. End of day: extract facts from today's conversations
+cat sessions/*.json | agent-memory extract --scope project --project agent-memory
 
-*\*: Fact storage and search work fully offline. Extraction requires an LLM API call.*
+# 2. Before each agent session: inject relevant memories
+inject_summary=$(agent-memory inject --query "context for today's task" --scope project --project blog --limit 10)
 
----
-
-## File Format
-
-Facts are stored as plain JSONL — one JSON object per line, one file per day.
-No database required. You can read, edit, or back them up with any text tool.
-
-```json
-{"id": "pr:a1b2c3d4e5f6g7", "type": "preference", "content": "User prefers CLI over GUI",
- "confidence": 1.0, "evidence": "User said: 'I prefer CLI over GUI'",
- "source_date": "2026-06-02", "supersedes": "", "created_at": 1748880000.0}
+# 3. The agent prompt includes only high-confidence, active, relevant facts
+system_prompt = f"You are a helpful assistant. User context: {inject_summary}"
 ```
 
 ---
 
-## Production Use
+## Project scoping
 
-Agent-memory has been running 24/7 in production since May 2026, powering
-80+ automated tasks daily on entry-level hardware. Metrics from real operation:
+Facts belong to a **scope** (`global` or `project`) and optionally a **project name**.
+
+```bash
+agent-memory extract --scope global          # applies everywhere
+agent-memory extract --scope project --project agent-memory  # project-specific
+agent-memory inject --scope project --project blog
+```
+
+This prevents cross-project pollution — your blog project's "use PostgreSQL" decision
+won't conflict with your general "avoid heavy dependencies" preference.
+
+---
+
+## Lifecycle: status & supersedes
+
+Every fact has a `status`:
+- `active` — current and trustworthy (default)
+- `archived` — still true but no longer relevant
+- `wrong` — confirmed incorrect
+- `superseded` — replaced by a newer fact
+
+When you correct a fact (`agent-memory edit --content "new"`), the old ID is
+automatically linked via `supersedes`. Search and inject default to `active` only.
+
+---
+
+## Performance
+
+Agent-memory has been running 24/7 since May 2026, powering
+80+ automated tasks daily on personal hardware. Metrics from real operation:
 
 - **~25 facts extracted per day** from daily conversation summaries
-- **~92% of extracted facts** have confidence ≥ 0.8 (injection-worthy)
-- **~300KB/month** storage for a full production workload
-- **Content-hash dedup** — warm process O(1), rebuild index O(n) on cold start
-- **100% availability** — zero database to go down, zero services to deploy
-
-### Real evolution chains (from production)
-
-**Before → After (tool preference):**
-```
-[May 15] preference 1.0 | User prefers Vim for all text editing
-[May 22] preference 0.9 | User has been using VS Code more lately
-[Jun 01] preference 1.0 | User prefers VS Code as their primary editor
-→ inject shows only the latest; older versions preserved for audit
-```
-
-**Rejection preventing repeat suggestions:**
-```
-[Jun 01] rejection_reason 1.0 | Rejected MongoDB — too complex for single-user setup
-[Jun 05] rejection_reason 0.9 | Rejected cloud services — ongoing cost concerns
-→ Both facts were injected proactively, preventing the agent from suggesting either
-   option in subsequent conversations
-```
+- **O(1) dedup** after startup index rebuild
+- **~1-2KB inject size** for a system prompt with 15 active facts
+- **~1.5s extraction time** per daily conversation (gpt-4o-mini)
 
 ---
 
-## Project Status
+## Architecture
 
-**Beta (v0.2).** Core APIs are stable. Extraction quality is significantly improved
-with 60+ few-shot examples and rule-based post-processing.
+See [ARCHITECTURE.md](docs/architecture.md) and [DESIGN.md](docs/design.md).
 
-Upcoming:
-- [ ] Extraction benchmark suite (standard test conversations)
-- [ ] Semantic search as optional backend
-- [ ] Integration examples for LangChain, CrewAI, AutoGen
-- [ ] Web UI for browsing/editing facts
+Key design decisions:
+- **JSONL files** — grep-able, backup-able, git-versionable, no service dependency
+- **BM25 search** — zero-dependency term-frequency ranking with CJK support
+- **No vector DB** — not needed for personal-scope memory (typically <10K facts)
+- **Rule-based self-critique** — validates evidence factuality without additional LLM calls
 
 ---
 
-## Legal
+## Why not mem0 / Graphiti / LangMem?
 
-### Commercial Use ✅
+Those projects solve different problems:
 
-Agent-memory is licensed under the **MIT License** — you can use, modify, distribute,
-and sell it in commercial products. No restrictions, no royalties, no strings attached.
+- **mem0** — multi-user, multi-agent, cloud-native memory. Overkill for a single user.
+- **Graphiti** — knowledge graph-based memory for enterprise agents. Complex infra.
+- **LangMem** — LangChain ecosystem memory. Tightly coupled to LangChain.
 
-See [LICENSE](LICENSE) for the full text.
+Agent-memory is for the **personal agent running on a laptop or NAS** — where simplicity,
+auditability, and zero dependencies matter more than scale.
 
-### Disclaimer
+---
 
-This software comes with **no warranty** — see [DISCLAIMER](DISCLAIMER.md) for
-the full legal disclaimer covering AI output accuracy, data privacy, liability
-limitation, and permitted use.
+## License
+
+MIT

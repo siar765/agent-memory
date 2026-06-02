@@ -2,13 +2,14 @@
 Search and inject — retrieve relevant facts and format them for system prompts.
 
 Provides BM25 term-frequency search (zero-dependency pure Python implementation)
-alongside keyword, type, date, and confidence filters.
+alongside keyword, type, date, scope, project, status, and confidence filters.
 """
 
 from __future__ import annotations
 
 import math
 import re
+import time
 from collections import Counter
 from typing import Optional
 
@@ -33,10 +34,10 @@ class _BM25:
         self.b = 0.75
         self.corpus = corpus
         self.n_docs = len(corpus)
-        self.avg_dl = sum(len(d.split()) for d in corpus) / max(self.n_docs, 1)
+        self.avg_dl = sum(len(self._tokenize(d)) for d in corpus) / max(self.n_docs, 1)
 
         # Build document term frequencies
-        self.doc_tfs: list[Counter] = [Counter(d.split()) for d in corpus]
+        self.doc_tfs: list[Counter] = [Counter(self._tokenize(d)) for d in corpus]
 
         # Build inverse document frequencies
         self.idf: dict[str, float] = {}
@@ -48,6 +49,39 @@ class _BM25:
         for term in self.idf:
             df = sum(1 for doc_tf in self.doc_tfs if term in doc_tf)
             self.idf[term] = math.log((n_docs_float - df + 0.5) / (df + 0.5) + 1.0)
+
+    @staticmethod
+    def _tokenize(text: str) -> list[str]:
+        """Tokenize with CJK support — zero external dependencies.
+
+        Splits on whitespace/punctuation for Latin text, and extracts
+        individual CJK characters plus bigrams for Chinese/Japanese/Korean.
+        """
+        text = text.lower()
+        tokens = []
+        i = 0
+        buf = []
+        while i < len(text):
+            ch = text[i]
+            if '\u4e00' <= ch <= '\u9fff' or '\u3000' <= ch <= '\u303f':
+                # Flush any Latin buffer
+                if buf:
+                    tokens.append(''.join(buf))
+                    buf = []
+                tokens.append(ch)
+            elif ch.isalnum():
+                buf.append(ch)
+            else:
+                if buf:
+                    tokens.append(''.join(buf))
+                    buf = []
+                if ch in (' ', '\t', '\n', '\r'):
+                    pass  # skip whitespace
+                # skip punctuation
+            i += 1
+        if buf:
+            tokens.append(''.join(buf))
+        return tokens
 
     def score(self, query_terms: list[str], doc_idx: int) -> float:
         """BM25 score for a single document."""
@@ -65,7 +99,7 @@ class _BM25:
 
     def search(self, query: str, top_k: int = 50) -> list[tuple[int, float]]:
         """Return list of (doc_index, score) sorted by relevance."""
-        query_terms = query.lower().split()
+        query_terms = self._tokenize(query)
         if not query_terms or not self.corpus:
             return []
 
@@ -80,11 +114,11 @@ class _BM25:
 
 # Priority boost matrix: if query matches type keywords, boost that type
 _TYPE_PRIORITY_KEYWORDS = {
-    "preference": ["like", "prefer", "want", "dislike", "hate", "喜欢", "想要"],
+    "preference": ["like", "prefer", "want", "dislike", "hate", "讨厌", "喜欢", "想要"],
     "environment": ["server", "network", "system", "config", "setup", "env", "环境", "系统"],
     "decision": ["chose", "decided", "selected", "choose", "which", "决定", "选择"],
-    "rejection_reason": ["why not", "rejected", "avoid", "ruled out", "为什么", "不要"],
-    "convention": ["how", "always", "standard", "convention", "规则", "习惯"],
+    "rejection_reason": ["why not", "rejected", "avoid", "ruled out", "不要", "为什么"],
+    "convention": ["how", "always", "standard", "convention", "习惯", "规则"],
     "lesson": ["learn", "mistake", "broke", "error", "教训", "坑", "错了"],
 }
 
@@ -108,7 +142,7 @@ def _estimate_task_type(query: str) -> str | None:
 
 
 class MemorySearch:
-    """Search and retrieve atomic facts with BM25 + type/date/confidence filters."""
+    """Search and retrieve atomic facts with BM25 + type/date/scope/project/confidence filters."""
 
     def __init__(self, store: MemoryStore):
         self.store = store
@@ -119,17 +153,29 @@ class MemorySearch:
         fact_type: str = "",
         date_from: str = "",
         date_to: str = "",
+        scope: str = "",
+        project: str = "",
+        status: str = "",
+        active_only: bool = False,
         limit: int = 10,
         min_confidence: float = 0.0,
         use_bm25: bool = True,
     ) -> list[AtomicFact]:
         """Search facts with optional BM25 ranking.
 
+        NOTE: BM25 now runs on ALL loaded facts — no substring pre-filter
+        that would truncate the candidate set. CJK tokenization handles
+        Chinese/Japanese queries without external dependencies.
+
         Args:
-            query: Search keywords (used for both keyword filter and BM25).
+            query: Search keywords (used for BM25 ranking when enabled).
             fact_type: Filter by fact type string.
             date_from: Earliest date (YYYY-MM-DD).
             date_to: Latest date (YYYY-MM-DD).
+            scope: Filter by scope (``global`` / ``project``).
+            project: Filter by project name.
+            status: Filter by status string.
+            active_only: Shortcut for ``status="active"``.
             limit: Maximum results to return.
             min_confidence: Minimum confidence threshold.
             use_bm25: Enable BM25 term-frequency ranking (default: True).
@@ -141,16 +187,14 @@ class MemorySearch:
             date_from=date_from,
             date_to=date_to,
             fact_type=fact_type,
+            scope=scope,
+            project=project,
+            status=status,
+            active_only=active_only,
         )
 
         if not facts:
             return []
-
-        # Apply keyword filter (also used by BM25 for speed)
-        if query:
-            query_lower = query.lower()
-            facts = [f for f in facts if query_lower in f.content.lower()
-                     or (query_lower in f.evidence.lower())]
 
         # Apply confidence filter
         if min_confidence:
@@ -159,7 +203,8 @@ class MemorySearch:
         if not facts:
             return []
 
-        # BM25 ranking (if enabled and we have a query and enough facts)
+        # ---- BM25 ranking on FULL candidate set ----
+        # No substring pre-filter — BM25 runs on all matching facts.
         if use_bm25 and query and len(facts) > 1:
             corpus = [f.content + " " + f.evidence for f in facts]
             bm25 = _BM25(corpus)
@@ -193,11 +238,15 @@ class MemorySearch:
         date_from: str = "",
         query: str = "",
         active_only: bool = True,
+        scope: str = "",
+        project: str = "",
     ) -> str:
         """Generate a compact summary for system prompt injection.
 
-        Only includes high-confidence facts. Format is optimized for
-        LLM context window efficiency.
+        Active/superseded computation is done on the **full** fact set
+        BEFORE confidence/date filtering, ensuring superseded facts
+        don't leak through when the superseding fact happens to be
+        filtered out.
 
         Args:
             limit: Maximum facts to include.
@@ -205,27 +254,41 @@ class MemorySearch:
             date_from: Only include facts from this date onwards.
             query: Optional task context — facts are ranked by relevance to this query.
             active_only: Skip facts that have been superseded (default: True).
+            scope: Filter by scope (``global`` / ``project``).
+            project: Filter by project name.
 
         Returns:
             Formatted markdown string for system prompt injection, or empty string.
         """
-        facts = self.store.load(date_from=date_from)
+        # Step 1: Load ALL facts (no confidence/date filter yet)
+        all_facts = self.store.load(
+            date_from=date_from,
+            scope=scope,
+            project=project,
+        )
 
-        # Filter by confidence
-        facts = [f for f in facts if f.confidence >= min_confidence]
-
-        if not facts:
+        if not all_facts:
             return ""
 
-        # Filter out superseded facts (active_only)
+        # Step 2: Compute superseded IDs on the FULL set
+        superseded_ids: set[str] = set()
         if active_only:
-            superseded_ids = {f.supersedes for f in facts if f.supersedes}
-            facts = [f for f in facts if f.id not in superseded_ids]
+            superseded_ids = {f.supersedes for f in all_facts if f.supersedes}
+
+        # Step 3: Filter active (based on full-set computation)
+        if active_only:
+            all_facts = [f for f in all_facts if f.id not in superseded_ids]
+
+        if not all_facts:
+            return ""
+
+        # Step 4: Now apply confidence filter
+        facts = [f for f in all_facts if f.confidence >= min_confidence]
 
         if not facts:
             return ""
 
-        # Rank by relevance, confidence, recency, frequency, and type priority
+        # Step 5: Rank by relevance, confidence, recency, frequency, and type priority
         if query:
             corpus = [f.content + " " + f.evidence for f in facts]
             bm25 = _BM25(corpus) if len(facts) > 1 else None
@@ -259,7 +322,7 @@ class MemorySearch:
             }.get(f.type.value, "•")
             confidence_str = f"{int(f.confidence * 100)}%"
             date_str = f.source_date or ""
-            tag = f"[{f.type.value}]"
+            tag = f"[{f.scope}/{f.project or '*'}] [{f.type.value}]"
             lines.append(f"- {emoji} {tag} {confidence_str} | {f.content}")
 
         summary = "\n".join(lines) + "\n"
@@ -279,14 +342,16 @@ class MemorySearch:
 
 def _recency_score(fact: AtomicFact) -> float:
     """Score 0.0-1.0 based on how recent a fact is (within last 90 days)."""
-    import time
     age_days = (time.time() - fact.created_at) / 86400
     return max(0.0, 1.0 - age_days / 90.0)
 
 
 def _frequency_score(fact: AtomicFact) -> float:
-    """Score based on how many times this fact type appears (repeat = important)."""
-    # Default: neutral score
+    """Score based on how many times this fact type appears (repeat = important).
+
+    Uses a fixed neutral score for simplicity. Can be extended to count
+    per-type frequency across the entire fact store.
+    """
     return 0.5
 
 

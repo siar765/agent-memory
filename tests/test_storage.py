@@ -6,7 +6,7 @@ import tempfile
 from pathlib import Path
 
 from agent_memory.core import AtomicFact, FactType, MemoryConfig
-from agent_memory.storage import MemoryStore
+from agent_memory.storage import MemoryStore, _redact_secrets
 
 
 def _make_store(tmp_dir: str) -> MemoryStore:
@@ -114,6 +114,49 @@ class TestMemoryStore:
             assert len(prefs) == 1
             assert prefs[0].type == FactType.PREFERENCE
 
+    def test_load_with_scope_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _make_store(tmp)
+            store.save([
+                AtomicFact(type=FactType.PREFERENCE, content="Global fact", scope="global"),
+                AtomicFact(type=FactType.DECISION, content="Project fact", scope="project", project="blog"),
+            ])
+
+            global_facts = store.load(scope="global")
+            assert len(global_facts) == 1
+            assert global_facts[0].content == "Global fact"
+
+            project_facts = store.load(scope="project", project="blog")
+            assert len(project_facts) == 1
+            assert project_facts[0].content == "Project fact"
+
+    def test_load_with_status_filter(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _make_store(tmp)
+            store.save([
+                AtomicFact(type=FactType.PREFERENCE, content="Active fact", status="active"),
+                AtomicFact(type=FactType.PREFERENCE, content="Archived fact", status="archived"),
+            ])
+
+            active = store.load(status="active")
+            assert len(active) == 1
+            assert active[0].content == "Active fact"
+
+            archived = store.load(status="archived")
+            assert len(archived) == 1
+
+    def test_load_active_only(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _make_store(tmp)
+            store.save([
+                AtomicFact(type=FactType.PREFERENCE, content="Active fact"),
+                AtomicFact(type=FactType.PREFERENCE, content="Bad fact", status="wrong"),
+            ])
+
+            active = store.load(active_only=True)
+            assert len(active) == 1
+            assert active[0].content == "Active fact"
+
     def test_stats(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = _make_store(tmp)
@@ -128,6 +171,8 @@ class TestMemoryStore:
             assert s["by_type"]["preference"] == 2
             assert s["by_type"]["environment"] == 1
             assert s["storage_bytes"] > 0
+            assert "by_status" in s
+            assert "by_scope" in s
 
     def test_corrupted_line_skipped_during_load(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -148,3 +193,52 @@ class TestMemoryStore:
             for i in range(10):
                 store.save([_fact(f"Fact {i}")])
             assert store.stats()["total_facts"] == 10
+
+    def test_edit_recalculates_id_on_content_change(self):
+        """Editing content should recalculate the fact's ID."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _make_store(tmp)
+            fact = _fact("Old content")
+            store.save([fact])
+            old_id = fact.id
+
+            # Edit content
+            store.edit(old_id, content="New content")
+
+            # Old ID should no longer exist
+            assert store.load_by_id(old_id) is None
+
+            # New ID should exist
+            updated = AtomicFact(type=FactType.PREFERENCE, content="New content")
+            assert store.load_by_id(updated.id) is not None
+
+    def test_save_redacts_secrets(self):
+        """Secrets in content/evidence should be redacted before save."""
+        with tempfile.TemporaryDirectory() as tmp:
+            store = _make_store(tmp)
+            fact = AtomicFact(
+                type=FactType.ENVIRONMENT,
+                content="API key is sk-abc123def456ghijklmnopqrstuvwxyz",
+            )
+            store.save([fact])
+
+            loaded = store.load()
+            assert len(loaded) == 1
+            assert "[REDACTED]" in loaded[0].content
+            assert "sk-abc123" not in loaded[0].content
+
+
+class TestRedactSecrets:
+    def test_api_key_pattern(self):
+        assert "[REDACTED]" in _redact_secrets("sk-abc123DEF456ghijklmnopqrstuvwx")
+
+    def test_github_token(self):
+        assert "[REDACTED]" in _redact_secrets("ghp_abc123DEF456ghijklmnopqrstuvwx")
+
+    def test_credential_pair(self):
+        result = _redact_secrets('password = "super-secret-123"')
+        assert "[REDACTED]" in result
+
+    def test_private_key(self):
+        result = _redact_secrets("-----BEGIN RSA PRIVATE KEY-----\nABCDEF")
+        assert "[REDACTED]" in result

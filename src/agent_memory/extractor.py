@@ -440,13 +440,14 @@ class FactExtractor:
                 {"role": "user", "content": f"Extract atomic facts from:\n\n{text}"},
             ],
             "max_tokens": 4096,
-            "temperature": 0.2,
+            "temperature": 0.0,
         }).encode("utf-8")
 
         try:
             result = self._call_llm(payload)
             atoms = self._parse_response(result)
             atoms = self._post_process(atoms)
+            atoms = self._self_critique(atoms, text)
             return atoms
         except FactExtractorError:
             raise
@@ -597,3 +598,64 @@ class FactExtractor:
             validated.append(fact)
 
         return validated
+
+    def _self_critique(self, atoms: list[AtomicFact], conversation_text: str) -> list[AtomicFact]:
+        """Lightweight rule-based self-critique — zero additional LLM calls.
+
+        Checks:
+        1. Evidence actually mentions the content (factuality check)
+        2. Confidence too high for speculative language
+        3. Content is too generic to be useful
+        4. Critiques the model's confidence calibration
+        """
+        if not atoms:
+            return atoms
+
+        conversation_lower = conversation_text.lower()
+
+        for fact in atoms:
+            evidence = fact.evidence.lower()
+
+            # 1. If evidence is just a generic paraphrase of the rule, penalize
+            generic_evidence_indicators = [
+                "extracted from", "based on", "the user said", "user mentioned",
+                "inferred from", "the user seems", "as stated",
+            ]
+            if any(indicator in evidence[:60] for indicator in generic_evidence_indicators):
+                fact.confidence = min(fact.confidence, 0.75)
+
+            # 2. Check: does evidence actually appear in the conversation?
+            evidence_text = fact.evidence.strip()
+            if len(evidence_text) > 10:
+                # Check if evidence text (or close paraphrase) exists in conversation
+                evidence_keywords = set(re.findall(r"[a-zA-Z\u4e00-\u9fff]{4,}", evidence_text))
+                conversation_keywords = set(re.findall(r"[a-zA-Z\u4e00-\u9fff]{4,}", conversation_lower))
+                overlap = evidence_keywords & conversation_keywords
+                if len(evidence_keywords) > 3 and len(overlap) < 2:
+                    # Evidence doesn't match conversation — drop confidence
+                    fact.confidence = min(fact.confidence, 0.5)
+                    fact.evidence = fact.evidence + " [EVIDENCE MISMATCH]"
+
+            # 3. Confidence calibration: high confidence should have strong evidence
+            if fact.confidence >= 0.9 and len(fact.evidence) < 20:
+                # High confidence but very short evidence — slightly penalize
+                fact.confidence = min(fact.confidence, 0.85)
+
+            # 4. Content too generic to be a useful memory
+            content = fact.content.lower()
+            generic_patterns = [
+                r"^user (likes|prefers|uses|has) .{0,10}$",  # "User likes X" — too vague
+                r"^the (user|system|project) .{0,15}$",
+                r"^.{0,10} is (important|useful|helpful|good)",
+            ]
+            for pattern in generic_patterns:
+                if re.search(pattern, content):
+                    fact.confidence = min(fact.confidence, 0.6)
+                    break
+
+        return atoms
+
+
+# ==============================================================================
+# File input helpers
+# ==============================================================================

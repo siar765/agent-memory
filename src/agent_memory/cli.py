@@ -6,6 +6,9 @@ Usage::
     # Extract facts from a conversation file
     echo "..." | agent-memory extract
 
+    # Extract with interactive review
+    echo "..." | agent-memory extract --review
+
     # Search stored facts
     agent-memory search --query "preference" --type preference
 
@@ -14,10 +17,12 @@ Usage::
 
     # Manage facts
     agent-memory list
+    agent-memory list --scope project --project agent-memory
     agent-memory show <id>
     agent-memory delete <id>
     agent-memory edit <id> --content "new text"
     agent-memory forget --query "old info"
+    agent-memory redact <id>
 
     # Validate storage integrity
     agent-memory validate
@@ -54,6 +59,14 @@ def _build_config() -> MemoryConfig:
 
 def cmd_extract(args: list[str]) -> None:
     """Extract facts from stdin."""
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--review", action="store_true", help="Interactive review before saving")
+    parser.add_argument("--scope", default="global", help="Scope for extracted facts (global|project)")
+    parser.add_argument("--project", default="", help="Project name (required if scope=project)")
+    opts = parser.parse_args(args)
+
     text = sys.stdin.read()
     if not text.strip():
         print("[agent-memory] No input on stdin", file=sys.stderr)
@@ -78,7 +91,46 @@ def cmd_extract(args: list[str]) -> None:
         print("[agent-memory] No facts extracted (below confidence threshold or empty)")
         return
 
-    saved = store.save(facts)
+    # Apply scope/project
+    for f in facts:
+        f.scope = opts.scope
+        f.project = opts.project
+
+    # Interactive review mode
+    if opts.review:
+        print(f"[agent-memory] Reviewing {len(facts)} extracted facts:\n")
+        keep = []
+        for i, f in enumerate(facts, 1):
+            print(f"  [{i}] [{f.type.value:18s}] {f.confidence:.0%} | {f.content}")
+            evidence = f.evidence[:120] + "..." if len(f.evidence) > 120 else f.evidence
+            print(f"       Evidence: {evidence}\n")
+            while True:
+                choice = input(f"       Keep [Y/n/e]dit? ").strip().lower()
+                if choice in ("", "y", "yes"):
+                    keep.append(f)
+                    break
+                elif choice in ("n", "no"):
+                    print(f"       [Skipped]")
+                    break
+                elif choice in ("e", "edit"):
+                    new_content = input(f"       New content: ").strip()
+                    if new_content:
+                        f.content = new_content
+                        keep.append(f)
+                        print(f"       [Edited]")
+                    break
+                else:
+                    print(f"       Enter Y (keep), n (skip), or e (edit)")
+        facts = keep
+        print(f"\n[agent-memory] Kept {len(facts)} of {len(keep) + (sum(1 for _ in []))} facts" if False else
+              f"[agent-memory] Kept {len(facts)} facts after review")
+        print()
+
+    if not facts:
+        print("[agent-memory] No facts to save after review")
+        return
+
+    saved = store.save(facts, scope=opts.scope, project=opts.project)
 
     # Extraction report
     print(f"[agent-memory] Extracted {len(facts)} facts, saved {saved} new")
@@ -97,7 +149,7 @@ def cmd_extract(args: list[str]) -> None:
 
     # List facts
     for f in facts:
-        print(f"  [{f.type.value:18s}] {f.confidence:.0%} | {f.content}")
+        print(f"  [{f.scope}/{f.project or '*':10s}] [{f.type.value:18s}] {f.confidence:.0%} | {f.content}")
 
     if len(facts) > saved:
         print(f"  ({len(facts) - saved} duplicates skipped)")
@@ -110,6 +162,9 @@ def cmd_search(args: list[str]) -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--query", default="")
     parser.add_argument("--type", default="")
+    parser.add_argument("--scope", default="")
+    parser.add_argument("--project", default="")
+    parser.add_argument("--status", default="")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--min-confidence", type=float, default=0.0)
     parser.add_argument("--no-bm25", action="store_true", help="Disable BM25 ranking")
@@ -122,6 +177,9 @@ def cmd_search(args: list[str]) -> None:
     facts = searcher.search(
         query=opts.query,
         fact_type=opts.type,
+        scope=opts.scope,
+        project=opts.project,
+        status=opts.status,
         limit=opts.limit,
         min_confidence=opts.min_confidence,
         use_bm25=not opts.no_bm25,
@@ -133,7 +191,10 @@ def cmd_search(args: list[str]) -> None:
 
     print(f"[agent-memory] {len(facts)} matching facts:")
     for f in facts:
-        print(f"  [{f.type.value:18s}] {f.confidence:.0%} | {f.source_date} | {f.content}")
+        label = ""
+        if f.status != "active":
+            label = f" [{f.status}]"
+        print(f"  [{f.scope}/{f.project or '*':10s}] [{f.type.value:18s}] {f.confidence:.0%} | {f.source_date} | {f.content[:120]}{label}")
 
 
 def cmd_inject(args: list[str]) -> None:
@@ -144,6 +205,8 @@ def cmd_inject(args: list[str]) -> None:
     parser.add_argument("--limit", type=int, default=15)
     parser.add_argument("--min-confidence", type=float, default=0.8)
     parser.add_argument("--date-from", default="")
+    parser.add_argument("--scope", default="", help="Filter by scope (global|project)")
+    parser.add_argument("--project", default="", help="Filter by project name")
     parser.add_argument("--query", default="", help="Task context for relevance ranking")
     parser.add_argument("--all", action="store_true", help="Include superseded facts too")
     opts = parser.parse_args(args)
@@ -158,6 +221,8 @@ def cmd_inject(args: list[str]) -> None:
         date_from=opts.date_from,
         query=opts.query,
         active_only=not opts.all,
+        scope=opts.scope,
+        project=opts.project,
     )
 
     if summary:
@@ -180,40 +245,77 @@ def cmd_stats(args: list[str]) -> None:
     print(f"  Storage used:    {stats['storage_bytes']:,} bytes")
     print(f"  Data directory:  {stats['data_dir']}")
     print()
+
     print(f"  By type:")
     for t, count in sorted(stats["by_type"].items(), key=lambda x: -x[1]):
         print(f"    {t:20s} {count}")
+    print()
+
+    print(f"  By status:")
+    for s, count in sorted(stats["by_status"].items(), key=lambda x: -x[1]):
+        print(f"    {s:20s} {count}")
+    print()
+
+    print(f"  By scope:")
+    for s, count in sorted(stats["by_scope"].items(), key=lambda x: -x[1]):
+        print(f"    {s:20s} {count}")
+    print()
+
+    print(f"  By project:")
+    for p, count in sorted(stats["by_project"].items(), key=lambda x: -x[1]):
+        print(f"    {p:20s} {count}")
 
 
 def cmd_list(args: list[str]) -> None:
-    """List all stored facts."""
+    """List all stored facts.
+
+    The ``[superseded]`` label is computed from ALL facts, not just
+    the filtered subset. This ensures correct display even when
+    the superseding fact is outside the current filter.
+    """
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--type", default="", help="Filter by fact type")
+    parser.add_argument("--scope", default="", help="Filter by scope (global|project)")
+    parser.add_argument("--project", default="", help="Filter by project name")
+    parser.add_argument("--status", default="", help="Filter by status")
     parser.add_argument("--limit", type=int, default=30)
     parser.add_argument("--min-confidence", type=float, default=0.0)
     opts = parser.parse_args(args)
 
     config = _build_config()
     store = MemoryStore(config)
-    searcher = MemorySearch(store)
 
-    facts = searcher.search(
+    # Load ALL facts to compute superseded_ids correctly
+    all_facts = store.load()
+    superseded_ids = {f.supersedes for f in all_facts if f.supersedes}
+
+    # Now load with filters for display
+    facts = store.load(
         fact_type=opts.type,
-        limit=opts.limit,
-        min_confidence=opts.min_confidence,
-        use_bm25=False,
+        scope=opts.scope,
+        project=opts.project,
+        status=opts.status,
     )
+
+    # Apply confidence filter
+    if opts.min_confidence:
+        facts = [f for f in facts if f.confidence >= opts.min_confidence]
+
+    # Sort by date (newest first), then confidence
+    facts.sort(key=lambda f: (-f.created_at, -f.confidence))
 
     if not facts:
         print("[agent-memory] No facts stored")
         return
 
     print(f"[agent-memory] {len(facts)} facts:")
-    for f in facts:
-        ss = " [superseded]" if f.supersedes else ""
-        print(f"  {f.id[:20]:20s} [{f.type.value:18s}] {f.confidence:.0%} | {f.content[:80]}{ss}")
+    for f in facts[:opts.limit]:
+        ss = " [superseded]" if f.id in superseded_ids else ""
+        status_label = f" [{f.status}]" if f.status != "active" else ""
+        print(f"  {f.id[:22]:22s} [{f.type.value:18s}] {f.confidence:.0%} | "
+              f"{f.scope}/{f.project or '*':6s}{status_label}{ss} | {f.content[:80]}")
 
 
 def cmd_show(args: list[str]) -> None:
@@ -234,6 +336,9 @@ def cmd_show(args: list[str]) -> None:
     print(f"ID:          {fact.id}")
     print(f"Type:        {fact.type.value}")
     print(f"Confidence:  {fact.confidence:.0%}")
+    print(f"Scope:       {fact.scope}")
+    print(f"Project:     {fact.project or '(none)'}")
+    print(f"Status:      {fact.status}")
     print(f"Content:     {fact.content}")
     print(f"Evidence:    {fact.evidence}")
     print(f"Date:        {fact.source_date}")
@@ -259,7 +364,11 @@ def cmd_delete(args: list[str]) -> None:
 
 
 def cmd_edit(args: list[str]) -> None:
-    """Edit a fact by ID."""
+    """Edit a fact by ID.
+
+    If content or type changes, the ID is recalculated automatically
+    and the old ID is linked via ``supersedes``.
+    """
     import argparse
 
     parser = argparse.ArgumentParser()
@@ -268,6 +377,9 @@ def cmd_edit(args: list[str]) -> None:
     parser.add_argument("--confidence", type=float, default=None)
     parser.add_argument("--type", default=None)
     parser.add_argument("--evidence", default=None)
+    parser.add_argument("--status", default=None, choices=["active", "archived", "wrong", "superseded"])
+    parser.add_argument("--scope", default=None, choices=["global", "project"])
+    parser.add_argument("--project", default=None)
     opts = parser.parse_args(args)
 
     updates = {}
@@ -279,9 +391,15 @@ def cmd_edit(args: list[str]) -> None:
         updates["type"] = opts.type
     if opts.evidence is not None:
         updates["evidence"] = opts.evidence
+    if opts.status is not None:
+        updates["status"] = opts.status
+    if opts.scope is not None:
+        updates["scope"] = opts.scope
+    if opts.project is not None:
+        updates["project"] = opts.project
 
     if not updates:
-        print("[agent-memory] No updates specified. Use --content, --confidence, --type, or --evidence")
+        print("[agent-memory] No updates specified. Use --content, --confidence, --type, --evidence, --status, --scope, or --project")
         return
 
     config = _build_config()
@@ -289,6 +407,17 @@ def cmd_edit(args: list[str]) -> None:
 
     if store.edit(opts.id, **updates):
         print(f"[agent-memory] Updated fact: {opts.id}")
+        if "content" in updates or "type" in updates:
+            # Load the updated fact to show new ID
+            updated = store.load_by_id(opts.id)
+            if not updated:
+                # Must have been recalculated — search by supersedes
+                all_facts = store.load()
+                for f in all_facts:
+                    if f.supersedes == opts.id:
+                        print(f"  New ID: {f.id}")
+                        print(f"  Supersedes: {f.supersedes}")
+                        break
     else:
         print(f"[agent-memory] Fact not found: {opts.id}")
 
