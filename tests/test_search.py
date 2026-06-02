@@ -148,6 +148,65 @@ class TestInjectSummary:
             summary = searcher.inject_summary(active_only=False)
             assert "Proposed pattern" in summary
 
+    def test_inject_include_global_merges_project_and_global(self):
+        """include_global=True should merge project and global facts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            searcher, store = _make_search(tmp)
+            store.save([
+                AtomicFact(type=FactType.PREFERENCE, content="Global CLI preference", confidence=1.0, scope="global"),
+                AtomicFact(type=FactType.DECISION, content="Blog uses PostgreSQL", confidence=1.0, scope="project", project="blog"),
+                AtomicFact(type=FactType.ENVIRONMENT, content="NAS port 443 blocked", confidence=1.0, scope="project", project="nas"),
+            ])
+            # Without include_global
+            summary = searcher.inject_summary(scope="project", project="blog")
+            assert "Blog uses PostgreSQL" in summary
+            assert "Global CLI preference" not in summary
+            assert "NAS port 443" not in summary
+
+            # With include_global
+            summary2 = searcher.inject_summary(scope="project", project="blog", include_global=True)
+            assert "Blog uses PostgreSQL" in summary2
+            assert "Global CLI preference" in summary2
+            assert "NAS port 443" not in summary2  # other project excluded
+
+    def test_accept_reject_proposed(self):
+        """Accept and reject should work with the store directly."""
+        with tempfile.TemporaryDirectory() as tmp:
+            config = MemoryConfig(data_dir=tmp)
+            store = MemoryStore(config)
+
+            # Save a proposed fact
+            fact = AtomicFact(type=FactType.CONVENTION, content="Test pattern", confidence=0.6, status="proposed")
+            store.save([fact])
+
+            # Accept
+            assert store.load_by_id(fact.id) is not None
+            store.edit(fact.id, status="active", confidence=0.9)
+            updated = store.load_by_id(fact.id)
+            assert updated is not None
+            assert updated.status == "active"
+            assert updated.confidence == 0.9
+
+            # Reject
+            fact2 = AtomicFact(type=FactType.CONVENTION, content="Another pattern", confidence=0.6, status="proposed")
+            store.save([fact2])
+            store.edit(fact2.id, status="wrong", confidence=0.0)
+            rejected = store.load_by_id(fact2.id)
+            assert rejected is not None
+            assert rejected.status == "wrong"
+
+    def test_inject_summary_supersedes_and_status_filtering(self):
+        """Regression: inject should exclude both superseded-IDs and non-active-status facts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            searcher, store = _make_search(tmp)
+            old = AtomicFact(type=FactType.PREFERENCE, content="Old preference", confidence=1.0)
+            new = AtomicFact(type=FactType.PREFERENCE, content="New preference", confidence=1.0, supersedes=old.id)
+            store.save([old, new])
+
+            summary = searcher.inject_summary(active_only=True)
+            assert "New preference" in summary
+            assert "Old preference" not in summary  # superseded via supersedes
+
     def test_inject_emoji_by_type(self):
         with tempfile.TemporaryDirectory() as tmp:
             searcher, store = _make_search(tmp)

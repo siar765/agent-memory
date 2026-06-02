@@ -8,7 +8,7 @@
 
   <p align="center">
     <a href="LICENSE"><img src="https://img.shields.io/github/license/siar765/agent-memory?style=flat-square" alt="License"></a>
-    <a href="https://github.com/siar765/agent-memory/releases/tag/v1.0.0-beta.1"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Beta"></a>
+    <a href="https://github.com/siar765/agent-memory/releases/tag/v1.0.0-beta.3"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Beta"></a>
     <a href="#zero-dependencies"><img src="https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square" alt="Zero dependencies"></a>
     <a href="https://github.com/siar765/agent-memory/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/siar765/agent-memory/test.yml?style=flat-square&label=tests" alt="Tests"></a>
     <a href="https://github.com/siar765/agent-memory/stargazers"><img src="https://img.shields.io/github/stars/siar765/agent-memory?style=flat-square" alt="Stars"></a>
@@ -46,7 +46,7 @@ What if memory was just... a text file?
 
 ```bash
 pip install git+https://github.com/siar765/agent-memory.git
-# That's it. No server. No API key. No setup.
+# No server or database required. Extraction requires an LLM API key (see Quick start).
 ```
 
 Agent-memory is a **local-first, editable memory layer** for personal AI agents. It extracts durable facts from conversations — what you like, what you decided, what doesn't work — and stores them as plain JSONL.
@@ -104,15 +104,26 @@ agent-memory forget --query "old information i no longer need"
 
 ```bash
 agent-memory extract --scope project --project blog
-agent-memory inject --scope project --project agent-memory
+agent-memory inject --scope project --project blog --include-global
+# --include-global merges global preferences with project-specific facts
 ```
 
-**Evolution chain** — when you correct a fact, the old one isn't lost, it's linked:
+**Evolution chain** — correct a fact without losing history. The old fact is preserved as `superseded`, the new one links back:
 
 ```
-[Old] "Prefers dark mode" ──supersedes──→ [New] "Now prefers light mode"
+[Old] "Prefers dark mode"  ──supersedes──→ [New] "Now prefers light mode"
+    status=superseded                           status=active
                                 ↕
-              inject filters out the old, shows the new
+              inject/search default to active, exclude superseded/proposed
+```
+
+**Review gate** — auto-detected patterns land as `proposed` facts, kept out of your agent's prompt until you review:
+
+```bash
+agent-memory propose "User checks crypto prices daily" --type convention
+agent-memory list --status proposed   # review pending proposals
+agent-memory accept pr:xxx --confidence 0.9  # promote to active
+agent-memory reject pr:xxx           # discard
 ```
 
 ---
@@ -188,7 +199,8 @@ agent-memory delete pr:obsolete_entry
 | Local-first | ✅ | ❌ | ❌ | ✅ | ✅ |
 | Editable facts | ✅ | ❌ | ⚠️ | ⚠️ | ❌ |
 | Evolution chain | ✅ | ❌ | ✅ | ❌ | ✅ |
-| Project isolation | ✅ | ❌ | ❌ | ❌ | ✅ |
+| Review gate (propose→accept/reject) | ✅ | ❌ | ❌ | ❌ | ❌ |
+| Project isolation + global merge | ✅ | ❌ | ❌ | ❌ | ✅ |
 | File format | JSONL (grep-able) | proprietary | graph DB | proprietary | proprietary |
 | Single-user | ✅ (targeted) | ❌ (multi-user) | ❌ (enterprise) | ❌ (framework) | ✅ |
 

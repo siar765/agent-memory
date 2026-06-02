@@ -240,6 +240,7 @@ class MemorySearch:
         active_only: bool = True,
         scope: str = "",
         project: str = "",
+        include_global: bool = False,
     ) -> str:
         """Generate a compact summary for system prompt injection.
 
@@ -248,24 +249,41 @@ class MemorySearch:
         don't leak through when the superseding fact happens to be
         filtered out.
 
+        When ``include_global`` is True and a project is specified, global
+        (scope="global") facts are merged with the project-specific ones.
+        This gives you project context + personal preferences in one shot.
+
         Args:
             limit: Maximum facts to include.
             min_confidence: Minimum confidence (default 0.8).
             date_from: Only include facts from this date onwards.
             query: Optional task context — facts are ranked by relevance to this query.
-            active_only: Skip facts that have been superseded (default: True).
+            active_only: Skip superseded/proposed/wrong/archived facts (default: True).
             scope: Filter by scope (``global`` / ``project``).
             project: Filter by project name.
+            include_global: When True and scope/project is set, also include global facts.
 
         Returns:
             Formatted markdown string for system prompt injection, or empty string.
         """
-        # Step 1: Load ALL facts (no confidence/date filter yet)
-        all_facts = self.store.load(
-            date_from=date_from,
-            scope=scope,
-            project=project,
-        )
+        # If include_global and a project is specified, load project + global
+        if include_global and project:
+            project_facts = self.store.load(
+                date_from=date_from,
+                scope="project",
+                project=project,
+            )
+            global_facts = self.store.load(
+                date_from=date_from,
+                scope="global",
+            )
+            all_facts = project_facts + global_facts
+        else:
+            all_facts = self.store.load(
+                date_from=date_from,
+                scope=scope,
+                project=project,
+            )
 
         if not all_facts:
             return ""

@@ -41,7 +41,15 @@ Usage::
 
     # Propose a new fact (low confidence, requires review)
     agent-memory propose "User checks crypto prices daily" --type convention
-    agent-memory list --status proposed
+
+    # Review proposed facts
+    agent-memory review
+    agent-memory accept pr:xxx --confidence 0.9
+    agent-memory reject pr:xxx
+    agent-memory reject pr:xxx --delete
+
+    # Inject with project + global preferences merged
+    agent-memory inject --scope project --project blog --include-global
 """
 
 from __future__ import annotations
@@ -223,7 +231,9 @@ def cmd_inject(args: list[str]) -> None:
     parser.add_argument("--scope", default="", help="Filter by scope (global|project)")
     parser.add_argument("--project", default="", help="Filter by project name")
     parser.add_argument("--query", default="", help="Task context for relevance ranking")
-    parser.add_argument("--all", action="store_true", help="Include superseded facts too")
+    parser.add_argument("--all", action="store_true", help="Include non-active facts too")
+    parser.add_argument("--include-global", action="store_true",
+                        help="Merge global preferences with project-specific facts")
     opts = parser.parse_args(args)
 
     config = _build_config()
@@ -238,6 +248,7 @@ def cmd_inject(args: list[str]) -> None:
         active_only=not opts.all,
         scope=opts.scope,
         project=opts.project,
+        include_global=opts.include_global,
     )
 
     if summary:
@@ -561,6 +572,98 @@ def cmd_propose(args: list[str]) -> None:
         print("[agent-memory] Duplicate — fact already exists")
 
 
+def cmd_review(args: list[str]) -> None:
+    """List all proposed facts for review."""
+    config = _build_config()
+    store = MemoryStore(config)
+
+    facts = store.load(status="proposed")
+    if not facts:
+        print("[agent-memory] No proposed facts pending review")
+        return
+
+    # Get superseded IDs for display
+    all_facts = store.load()
+    superseded_ids = {f.supersedes for f in all_facts if f.supersedes}
+
+    facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+    print(f"[agent-memory] {len(facts)} proposed fact(s) awaiting review:\n")
+    for i, f in enumerate(facts, 1):
+        ss = " [superseded?]" if f.id in superseded_ids else ""
+        print(f"  {i:2d}. {f.id[:22]:22s} [{f.type.value:18s}] {f.confidence:.0%} | "
+              f"{f.scope}/{f.project or '*':6s}{ss}")
+        print(f"      {f.content[:120]}")
+        print(f"      Evidence: {f.evidence[:80]}")
+        print(f"      Accept: agent-memory accept {f.id} [--confidence 0.9]")
+        print(f"      Reject: agent-memory reject {f.id}")
+        print()
+
+
+def cmd_accept(args: list[str]) -> None:
+    """Promote a proposed fact to active."""
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("id", help="Fact ID to accept")
+    parser.add_argument("--confidence", type=float, default=0.9,
+                        help="Confidence to set (default: 0.9)")
+    opts = parser.parse_args(args)
+
+    config = _build_config()
+    store = MemoryStore(config)
+
+    fact = store.load_by_id(opts.id)
+    if not fact:
+        print(f"[agent-memory] Fact not found: {opts.id}")
+        return
+
+    if fact.status != "proposed":
+        print(f"[agent-memory] Fact {opts.id} is not proposed (status={fact.status})")
+        return
+
+    confidence = max(0.0, min(opts.confidence, 1.0))
+    if store.edit(opts.id, status="active", confidence=confidence):
+        print(f"[agent-memory] Accepted fact: {opts.id}")
+        print(f"  Type: {fact.type.value} | Confidence: {int(confidence * 100)}% | Status: active")
+        print(f"  Content: {fact.content}")
+    else:
+        print(f"[agent-memory] Failed to accept fact: {opts.id}")
+
+
+def cmd_reject(args: list[str]) -> None:
+    """Reject a proposed fact (set to wrong or delete)."""
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("id", help="Fact ID to reject")
+    parser.add_argument("--delete", action="store_true",
+                        help="Delete instead of marking as wrong")
+    opts = parser.parse_args(args)
+
+    config = _build_config()
+    store = MemoryStore(config)
+
+    fact = store.load_by_id(opts.id)
+    if not fact:
+        print(f"[agent-memory] Fact not found: {opts.id}")
+        return
+
+    if fact.status != "proposed":
+        print(f"[agent-memory] Fact {opts.id} is not proposed (status={fact.status})")
+        return
+
+    if opts.delete:
+        if store.delete(opts.id):
+            print(f"[agent-memory] Deleted proposed fact: {opts.id}")
+        else:
+            print(f"[agent-memory] Failed to delete fact: {opts.id}")
+    else:
+        if store.edit(opts.id, status="wrong", confidence=0.0):
+            print(f"[agent-memory] Rejected fact: {opts.id}")
+        else:
+            print(f"[agent-memory] Failed to reject fact: {opts.id}")
+
+
 def cmd_history(args: list[str]) -> None:
     """Trace the evolution history of a fact or facts matching a query."""
     import argparse
@@ -618,7 +721,8 @@ def main() -> None:
                         choices=["extract", "search", "inject", "stats",
                                  "list", "show", "delete", "edit",
                                  "forget", "validate", "redact",
-                                 "summarize", "history", "propose"])
+                                 "summarize", "history", "propose",
+                                 "review", "accept", "reject"])
     args, remaining = parser.parse_known_args()
 
     if not args.command:
@@ -640,6 +744,9 @@ def main() -> None:
         "summarize": cmd_summarize,
         "history": cmd_history,
         "propose": cmd_propose,
+        "review": cmd_review,
+        "accept": cmd_accept,
+        "reject": cmd_reject,
     }
 
     commands[args.command](remaining)
