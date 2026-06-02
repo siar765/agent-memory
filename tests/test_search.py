@@ -122,6 +122,32 @@ class TestInjectSummary:
             lines = summary.split("\n")
             assert any(l.startswith("- ") for l in lines)
 
+    def test_inject_excludes_non_active_status(self):
+        """inject_summary(active_only=True) should exclude wrong/archived/proposed facts."""
+        with tempfile.TemporaryDirectory() as tmp:
+            searcher, store = _make_search(tmp)
+            store.save([
+                AtomicFact(type=FactType.PREFERENCE, content="Active preference", confidence=1.0, status="active"),
+                AtomicFact(type=FactType.PREFERENCE, content="Wrong fact", confidence=1.0, status="wrong"),
+                AtomicFact(type=FactType.PREFERENCE, content="Archived fact", confidence=1.0, status="archived"),
+                AtomicFact(type=FactType.CONVENTION, content="Proposed pattern", confidence=0.6, status="proposed"),
+            ])
+            summary = searcher.inject_summary(active_only=True)
+            assert "Active preference" in summary
+            assert "Wrong fact" not in summary
+            assert "Archived fact" not in summary
+            assert "Proposed pattern" not in summary
+
+    def test_inject_with_all_includes_proposed(self):
+        """inject_summary(active_only=False) should include all statuses."""
+        with tempfile.TemporaryDirectory() as tmp:
+            searcher, store = _make_search(tmp)
+            store.save([
+                AtomicFact(type=FactType.CONVENTION, content="Proposed pattern", confidence=0.9, status="proposed"),
+            ])
+            summary = searcher.inject_summary(active_only=False)
+            assert "Proposed pattern" in summary
+
     def test_inject_emoji_by_type(self):
         with tempfile.TemporaryDirectory() as tmp:
             searcher, store = _make_search(tmp)

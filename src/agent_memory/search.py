@@ -156,7 +156,7 @@ class MemorySearch:
         scope: str = "",
         project: str = "",
         status: str = "",
-        active_only: bool = False,
+        active_only: bool = True,
         limit: int = 10,
         min_confidence: float = 0.0,
         use_bm25: bool = True,
@@ -175,7 +175,7 @@ class MemorySearch:
             scope: Filter by scope (``global`` / ``project``).
             project: Filter by project name.
             status: Filter by status string.
-            active_only: Shortcut for ``status="active"``.
+            active_only: Only return active facts (default: True).
             limit: Maximum results to return.
             min_confidence: Minimum confidence threshold.
             use_bm25: Enable BM25 term-frequency ranking (default: True).
@@ -277,7 +277,11 @@ class MemorySearch:
 
         # Step 3: Filter active (based on full-set computation)
         if active_only:
-            all_facts = [f for f in all_facts if f.id not in superseded_ids]
+            all_facts = [
+                f for f in all_facts
+                if f.status == "active"
+                and f.id not in superseded_ids
+            ]
 
         if not all_facts:
             return ""

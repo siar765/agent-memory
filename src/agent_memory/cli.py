@@ -180,6 +180,7 @@ def cmd_search(args: list[str]) -> None:
     parser.add_argument("--status", default="")
     parser.add_argument("--limit", type=int, default=10)
     parser.add_argument("--min-confidence", type=float, default=0.0)
+    parser.add_argument("--all", action="store_true", help="Include non-active facts (wrong, archived, superseded, proposed)")
     parser.add_argument("--no-bm25", action="store_true", help="Disable BM25 ranking")
     opts = parser.parse_args(args)
 
@@ -193,6 +194,7 @@ def cmd_search(args: list[str]) -> None:
         scope=opts.scope,
         project=opts.project,
         status=opts.status,
+        active_only=not opts.all,
         limit=opts.limit,
         min_confidence=opts.min_confidence,
         use_bm25=not opts.no_bm25,
@@ -390,7 +392,7 @@ def cmd_edit(args: list[str]) -> None:
     parser.add_argument("--confidence", type=float, default=None)
     parser.add_argument("--type", default=None)
     parser.add_argument("--evidence", default=None)
-    parser.add_argument("--status", default=None, choices=["active", "archived", "wrong", "superseded"])
+    parser.add_argument("--status", default=None, choices=["active", "archived", "wrong", "superseded", "proposed"])
     parser.add_argument("--scope", default=None, choices=["global", "project"])
     parser.add_argument("--project", default=None)
     opts = parser.parse_args(args)

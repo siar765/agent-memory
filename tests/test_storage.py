@@ -194,23 +194,36 @@ class TestMemoryStore:
                 store.save([_fact(f"Fact {i}")])
             assert store.stats()["total_facts"] == 10
 
-    def test_edit_recalculates_id_on_content_change(self):
-        """Editing content should recalculate the fact's ID."""
+    def test_edit_creates_evolution_chain(self):
+        """Editing identity fields should preserve old fact as superseded and create new fact."""
         with tempfile.TemporaryDirectory() as tmp:
             store = _make_store(tmp)
             fact = _fact("Old content")
             store.save([fact])
             old_id = fact.id
 
-            # Edit content
+            # Edit content — triggers evolution chain
             store.edit(old_id, content="New content")
 
-            # Old ID should no longer exist
-            assert store.load_by_id(old_id) is None
+            # Old fact should still exist with status=superseded
+            old_fact = store.load_by_id(old_id)
+            assert old_fact is not None
+            assert old_fact.status == "superseded"
+            assert old_fact.content == "Old content"
 
-            # New ID should exist
-            updated = AtomicFact(type=FactType.PREFERENCE, content="New content")
-            assert store.load_by_id(updated.id) is not None
+            # New fact should exist with supersedes link
+            new_fact_ref = AtomicFact(type=FactType.PREFERENCE, content="New content")
+            new_fact = store.load_by_id(new_fact_ref.id)
+            assert new_fact is not None
+            assert new_fact.supersedes == old_id
+            assert new_fact.status == "active"
+
+            # Non-identity edit should update in-place
+            store.edit(old_id, confidence=0.5)
+            old_fact2 = store.load_by_id(old_id)
+            assert old_fact2 is not None
+            assert old_fact2.confidence == 0.5  # in-place update
+            assert old_fact2.status == "superseded"  # status preserved
 
     def test_save_redacts_secrets(self):
         """Secrets in content/evidence should be redacted before save."""

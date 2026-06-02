@@ -56,6 +56,9 @@ class FactStatus(str, Enum):
     SUPERSEDED = "superseded"
     """Replaced by a newer fact — excluded from inject, shown as superseded in list."""
 
+    PROPOSED = "proposed"
+    """Auto-detected pattern, pending human review — excluded from inject and default search."""
+
 
 @dataclass
 class AtomicFact:
@@ -106,7 +109,7 @@ class AtomicFact:
     """Project name if scope is ``project``. Empty string means no specific project."""
 
     status: str = "active"
-    """Lifecycle status: ``active``, ``archived``, ``wrong``, ``superseded``."""
+    """Lifecycle status: ``active``, ``archived``, ``wrong``, ``superseded``, ``proposed``."""
 
     id: str = ""
     """Content-hash based dedup key. Auto-generated if empty."""

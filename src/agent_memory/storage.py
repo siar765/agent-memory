@@ -139,22 +139,23 @@ class MemoryStore:
             facts = [f for f in facts if f.project == project]
 
         path = self._atoms_dir / f"{date_str}.jsonl"
+
+        # Pre-save secret redaction — do this BEFORE dedup/ID computation
+        # so different secrets that redact to the same content get the same ID
+        for fact in facts:
+            fact.source_date = date_str
+            fact.content = _redact_secrets(fact.content)
+            fact.evidence = _redact_secrets(fact.evidence)
+            # Recompute ID to match redacted content
+            fact.id = fact._compute_id()
+
         new_facts = [f for f in facts if f.id not in self._dedup_index]
 
         if not new_facts:
             return 0
 
-        # Pre-save secret redaction
-        lines = []
-        for fact in new_facts:
-            fact.source_date = date_str
-            content_clean = _redact_secrets(fact.content)
-            evidence_clean = _redact_secrets(fact.evidence)
-            if content_clean != fact.content:
-                fact.content = content_clean
-            if evidence_clean != fact.evidence:
-                fact.evidence = evidence_clean
-            lines.append(json.dumps(fact.to_dict(), ensure_ascii=False))
+        # Serialize new facts
+        lines = [json.dumps(f.to_dict(), ensure_ascii=False) for f in new_facts]
 
         # Append to daily file with lock
         if path.exists():
@@ -287,8 +288,12 @@ class MemoryStore:
     def edit(self, fact_id: str, **updates) -> bool:
         """Edit fields of an existing fact.
 
-        If content or type changes, the ID is automatically recalculated
-        and the old ID is recorded in ``supersedes``.
+        If identity fields change (content, type, scope, project), the old fact
+        is preserved with status=superseded and a new fact is appended with
+        the new ID and a ``supersedes`` link — creating a proper evolution chain.
+
+        Non-identity fields (confidence, evidence, status, source_date) are
+        updated in-place without changing the ID.
 
         Args:
             fact_id: The fact's unique ID to edit.
@@ -298,6 +303,8 @@ class MemoryStore:
         Returns:
             True if found and edited, False if not found.
         """
+        from datetime import datetime, timezone
+
         found = False
         for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
             lines = path.read_text().splitlines()
@@ -309,32 +316,51 @@ class MemoryStore:
                     data = json.loads(line)
                     if data.get("id") == fact_id:
                         found = True
-                        content_changed = "content" in updates
-                        type_changed = "type" in updates
+                        identity_fields = {"content", "type", "scope", "project"}
+                        identity_changed = any(k in updates for k in identity_fields)
 
-                        # Apply updates
-                        for key, value in updates.items():
-                            if key in ("type", "content", "evidence", "supersedes",
-                                       "source_date", "status", "scope", "project"):
-                                data[key] = value
-                            elif key == "confidence":
-                                data[key] = max(0.0, min(float(value), 1.0))
+                        if identity_changed:
+                            # --- Evolution chain: keep old fact as superseded ---
+                            # Step 1: Mark old fact as superseded
+                            old_status = data.get("status", "active")
+                            if old_status == "active":
+                                data["status"] = "superseded"
+                            new_lines.append(json.dumps(data, ensure_ascii=False))
 
-                        # Recalculate ID if content or type changed
-                        if content_changed or type_changed:
-                            # Create a temporary fact to get the new ID
+                            # Step 2: Build new fact with updates
+                            new_data = dict(data)  # copy old values
+                            new_data["id"] = ""  # will be recomputed
+                            new_data["supersedes"] = fact_id
+                            new_data["status"] = "active"
+                            new_data["created_at"] = datetime.now(timezone.utc).timestamp()
+
+                            # Apply updates to new fact
+                            for key, value in updates.items():
+                                if key in ("type", "content", "evidence", "supersedes",
+                                           "source_date", "status", "scope", "project"):
+                                    new_data[key] = value
+                                elif key == "confidence":
+                                    new_data[key] = max(0.0, min(float(value), 1.0))
+
+                            # Step 3: Compute new ID from updated identity fields
                             tmp = AtomicFact(
-                                type=FactType(data["type"]),
-                                content=data["content"],
-                                scope=data.get("scope", "global"),
-                                project=data.get("project", ""),
+                                type=FactType(new_data["type"]),
+                                content=new_data["content"],
+                                scope=new_data.get("scope", "global"),
+                                project=new_data.get("project", ""),
                             )
-                            new_id = tmp.id
-                            if new_id != fact_id:
-                                data["supersedes"] = fact_id
-                                data["id"] = new_id
+                            new_data["id"] = tmp.id
 
-                        new_lines.append(json.dumps(data, ensure_ascii=False))
+                            new_lines.append(json.dumps(new_data, ensure_ascii=False))
+                        else:
+                            # --- Non-identity change: update in-place ---
+                            for key, value in updates.items():
+                                if key in ("type", "content", "evidence", "supersedes",
+                                           "source_date", "status", "scope", "project"):
+                                    data[key] = value
+                                elif key == "confidence":
+                                    data[key] = max(0.0, min(float(value), 1.0))
+                            new_lines.append(json.dumps(data, ensure_ascii=False))
                     else:
                         new_lines.append(line)
                 except json.JSONDecodeError:
@@ -408,7 +434,7 @@ class MemoryStore:
         issues = []
         all_ids: set[str] = set()
         supersedes_refs: set[str] = set()
-        valid_statuses = {"active", "archived", "wrong", "superseded"}
+        valid_statuses = {"active", "archived", "wrong", "superseded", "proposed"}
         valid_scopes = {"global", "project"}
 
         for path in sorted(self._atoms_dir.glob("*.jsonl")):
