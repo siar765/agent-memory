@@ -1,17 +1,114 @@
 """
 Search and inject — retrieve relevant facts and format them for system prompts.
+
+Provides BM25 term-frequency search (zero-dependency pure Python implementation)
+alongside keyword, type, date, and confidence filters.
 """
 
 from __future__ import annotations
 
+import math
+import re
+from collections import Counter
 from typing import Optional
 
 from .core import AtomicFact, FactType, MemoryConfig
 from .storage import MemoryStore
 
 
+# ==============================================================================
+# Pure-Python BM25 implementation (zero external dependencies)
+# ==============================================================================
+
+
+class _BM25:
+    """BM25 ranking for term-frequency-aware search.
+
+    Pure Python implementation using only math and collections.
+    k1 = 1.5, b = 0.75 are standard Okapi BM25 parameters.
+    """
+
+    def __init__(self, corpus: list[str]):
+        self.k1 = 1.5
+        self.b = 0.75
+        self.corpus = corpus
+        self.n_docs = len(corpus)
+        self.avg_dl = sum(len(d.split()) for d in corpus) / max(self.n_docs, 1)
+
+        # Build document term frequencies
+        self.doc_tfs: list[Counter] = [Counter(d.split()) for d in corpus]
+
+        # Build inverse document frequencies
+        self.idf: dict[str, float] = {}
+        for doc in self.doc_tfs:
+            for term in doc:
+                self.idf[term] = self.idf.get(term, 0.0)
+
+        n_docs_float = float(self.n_docs)
+        for term in self.idf:
+            df = sum(1 for doc_tf in self.doc_tfs if term in doc_tf)
+            self.idf[term] = math.log((n_docs_float - df + 0.5) / (df + 0.5) + 1.0)
+
+    def score(self, query_terms: list[str], doc_idx: int) -> float:
+        """BM25 score for a single document."""
+        doc_tf = self.doc_tfs[doc_idx]
+        doc_len = sum(doc_tf.values())
+        score = 0.0
+        for term in query_terms:
+            if term not in self.idf:
+                continue
+            tf = doc_tf.get(term, 0)
+            numerator = tf * (self.k1 + 1.0)
+            denominator = tf + self.k1 * (1.0 - self.b + self.b * doc_len / self.avg_dl)
+            score += self.idf[term] * numerator / denominator
+        return score
+
+    def search(self, query: str, top_k: int = 50) -> list[tuple[int, float]]:
+        """Return list of (doc_index, score) sorted by relevance."""
+        query_terms = query.lower().split()
+        if not query_terms or not self.corpus:
+            return []
+
+        scored = [(i, self.score(query_terms, i)) for i in range(self.n_docs)]
+        scored.sort(key=lambda x: -x[1])
+        return [(i, s) for i, s in scored if s > 0][:top_k]
+
+
+# ==============================================================================
+# TYPE PRIORITY — used in ranking when a query suggests a task type
+# ==============================================================================
+
+# Priority boost matrix: if query matches type keywords, boost that type
+_TYPE_PRIORITY_KEYWORDS = {
+    "preference": ["like", "prefer", "want", "dislike", "hate", "喜欢", "想要"],
+    "environment": ["server", "network", "system", "config", "setup", "env", "环境", "系统"],
+    "decision": ["chose", "decided", "selected", "choose", "which", "决定", "选择"],
+    "rejection_reason": ["why not", "rejected", "avoid", "ruled out", "为什么", "不要"],
+    "convention": ["how", "always", "standard", "convention", "规则", "习惯"],
+    "lesson": ["learn", "mistake", "broke", "error", "教训", "坑", "错了"],
+}
+
+
+def _estimate_task_type(query: str) -> str | None:
+    """Guess what fact type is most relevant to a query."""
+    q = query.lower()
+    best_type = None
+    best_score = 0
+    for fact_type, keywords in _TYPE_PRIORITY_KEYWORDS.items():
+        score = sum(1 for kw in keywords if kw in q)
+        if score > best_score:
+            best_score = score
+            best_type = fact_type
+    return best_type
+
+
+# ==============================================================================
+# MAIN SEARCH CLASS
+# ==============================================================================
+
+
 class MemorySearch:
-    """Search and retrieve atomic facts with type/date/keyword filters."""
+    """Search and retrieve atomic facts with BM25 + type/date/confidence filters."""
 
     def __init__(self, store: MemoryStore):
         self.store = store
@@ -24,19 +121,21 @@ class MemorySearch:
         date_to: str = "",
         limit: int = 10,
         min_confidence: float = 0.0,
+        use_bm25: bool = True,
     ) -> list[AtomicFact]:
-        """Search facts by keyword, type, date range, and confidence.
+        """Search facts with optional BM25 ranking.
 
         Args:
-            query: Keyword to match in fact content (case-insensitive).
+            query: Search keywords (used for both keyword filter and BM25).
             fact_type: Filter by fact type string.
             date_from: Earliest date (YYYY-MM-DD).
             date_to: Latest date (YYYY-MM-DD).
             limit: Maximum results to return.
             min_confidence: Minimum confidence threshold.
+            use_bm25: Enable BM25 term-frequency ranking (default: True).
 
         Returns:
-            Matched facts sorted by confidence (high to low), then by date (newest first).
+            Matched facts sorted by relevance.
         """
         facts = self.store.load(
             date_from=date_from,
@@ -44,25 +143,56 @@ class MemorySearch:
             fact_type=fact_type,
         )
 
-        # Apply keyword filter
+        if not facts:
+            return []
+
+        # Apply keyword filter (also used by BM25 for speed)
         if query:
             query_lower = query.lower()
-            facts = [f for f in facts if query_lower in f.content.lower()]
+            facts = [f for f in facts if query_lower in f.content.lower()
+                     or (query_lower in f.evidence.lower())]
 
         # Apply confidence filter
         if min_confidence:
             facts = [f for f in facts if f.confidence >= min_confidence]
 
-        # Sort: high confidence first, then newest
-        facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+        if not facts:
+            return []
 
-        return facts[:limit]
+        # BM25 ranking (if enabled and we have a query and enough facts)
+        if use_bm25 and query and len(facts) > 1:
+            corpus = [f.content + " " + f.evidence for f in facts]
+            bm25 = _BM25(corpus)
+            scored_indices = bm25.search(query, top_k=limit * 2)
+            if scored_indices:
+                ranked = [(facts[i], s) for i, s in scored_indices]
+                # Merge BM25 score with confidence and recency
+                ranked.sort(key=lambda x: (
+                    x[1] * 0.45
+                    + x[0].confidence * 0.2
+                    + _recency_score(x[0]) * 0.15
+                    + _frequency_score(x[0]) * 0.1
+                    + _type_priority_score(x[0], query) * 0.1
+                ), reverse=True)
+                facts = [r[0] for r in ranked[:limit]]
+            else:
+                # Fallback: sort by confidence then recency
+                facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+                facts = facts[:limit]
+        else:
+            # Simple sort: confidence first, then newest
+            facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+            facts = facts[:limit]
+
+        return facts
 
     def inject_summary(
         self,
         limit: int = 15,
         min_confidence: float = 0.8,
         date_from: str = "",
+        query: str = "",
+        active_only: bool = True,
     ) -> str:
         """Generate a compact summary for system prompt injection.
 
@@ -73,19 +203,49 @@ class MemorySearch:
             limit: Maximum facts to include.
             min_confidence: Minimum confidence (default 0.8).
             date_from: Only include facts from this date onwards.
+            query: Optional task context — facts are ranked by relevance to this query.
+            active_only: Skip facts that have been superseded (default: True).
 
         Returns:
-            Formatted markdown string for system prompt injection.
+            Formatted markdown string for system prompt injection, or empty string.
         """
         facts = self.store.load(date_from=date_from)
 
-        # Filter and sort
+        # Filter by confidence
         facts = [f for f in facts if f.confidence >= min_confidence]
-        facts.sort(key=lambda f: (-f.confidence, -f.created_at))
-        facts = facts[:limit]
 
         if not facts:
             return ""
+
+        # Filter out superseded facts (active_only)
+        if active_only:
+            superseded_ids = {f.supersedes for f in facts if f.supersedes}
+            facts = [f for f in facts if f.id not in superseded_ids]
+
+        if not facts:
+            return ""
+
+        # Rank by relevance, confidence, recency, frequency, and type priority
+        if query:
+            corpus = [f.content + " " + f.evidence for f in facts]
+            bm25 = _BM25(corpus) if len(facts) > 1 else None
+            scored_indices = bm25.search(query, top_k=limit * 2) if bm25 else []
+            if scored_indices:
+                ranked = [(facts[i], s) for i, s in scored_indices]
+                ranked.sort(key=lambda x: (
+                    x[1] * 0.45
+                    + x[0].confidence * 0.2
+                    + _recency_score(x[0]) * 0.15
+                    + _frequency_score(x[0]) * 0.1
+                    + _type_priority_score(x[0], query) * 0.1
+                ), reverse=True)
+                facts = [r[0] for r in ranked[:limit]]
+            else:
+                facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+                facts = facts[:limit]
+        else:
+            facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+            facts = facts[:limit]
 
         lines = ["## Atomic Fact Summary"]
         for f in facts:
@@ -99,18 +259,40 @@ class MemorySearch:
             }.get(f.type.value, "•")
             confidence_str = f"{int(f.confidence * 100)}%"
             date_str = f.source_date or ""
-            lines.append(f"- {emoji} [{confidence_str}] {f.content}")
+            tag = f"[{f.type.value}]"
+            lines.append(f"- {emoji} {tag} {confidence_str} | {f.content}")
 
-        return "\n".join(lines) + "\n"
+        summary = "\n".join(lines) + "\n"
+        summary += f"*({len(facts)} active facts, threshold ≥{int(min_confidence * 100)}% confidence)*\n"
+
+        return summary
 
     def by_type(self, fact_type: str, limit: int = 20) -> list[AtomicFact]:
-        """Quick lookup: get facts of a specific type.
+        """Quick lookup: get facts of a specific type."""
+        return self.search(fact_type=fact_type, limit=limit, use_bm25=False)
 
-        Args:
-            fact_type: Fact type string (e.g., "preference", "environment").
-            limit: Maximum results.
 
-        Returns:
-            Facts of the given type, newest first.
-        """
-        return self.search(fact_type=fact_type, limit=limit)
+# ==============================================================================
+# Scoring helpers
+# ==============================================================================
+
+
+def _recency_score(fact: AtomicFact) -> float:
+    """Score 0.0-1.0 based on how recent a fact is (within last 90 days)."""
+    import time
+    age_days = (time.time() - fact.created_at) / 86400
+    return max(0.0, 1.0 - age_days / 90.0)
+
+
+def _frequency_score(fact: AtomicFact) -> float:
+    """Score based on how many times this fact type appears (repeat = important)."""
+    # Default: neutral score
+    return 0.5
+
+
+def _type_priority_score(fact: AtomicFact, query: str) -> float:
+    """Boost score if fact type matches the query's task type."""
+    task_type = _estimate_task_type(query)
+    if task_type and fact.type.value == task_type:
+        return 1.0
+    return 0.0
