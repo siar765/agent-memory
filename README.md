@@ -17,6 +17,8 @@ evolution-tracked facts — and forgets the rest.
   <a href="LICENSE"><img src="https://img.shields.io/github/license/siar765/agent-memory?style=flat-square" alt="License"></a>
   <a href="https://github.com/siar765/agent-memory/stargazers"><img src="https://img.shields.io/github/stars/siar765/agent-memory?style=flat-square" alt="Stars"></a>
   <a href="#"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Status"></a>
+  <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-blue?style=flat-square" alt="Security"></a>
+  <a href="DISCLAIMER.md"><img src="https://img.shields.io/badge/disclaimer-legal-lightgrey?style=flat-square" alt="Disclaimer"></a>
 </p>
 
 ---
@@ -244,6 +246,17 @@ Agent-memory has been running 24/7 in production since May 2026, powering
 
 ---
 
-## License
+## Legal
 
-MIT — do whatever you want.
+### Commercial Use ✅
+
+Agent-memory is licensed under the **MIT License** — you can use, modify, distribute,
+and sell it in commercial products. No restrictions, no royalties, no strings attached.
+
+See [LICENSE](LICENSE) for the full text.
+
+### Disclaimer
+
+This software comes with **no warranty** — see [DISCLAIMER](DISCLAIMER.md) for
+the full legal disclaimer covering AI output accuracy, data privacy, liability
+limitation, and permitted use.
