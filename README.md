@@ -1,44 +1,45 @@
 
-  <p align="center">
-    <img alt="agent-memory banner" src="https://raw.githubusercontent.com/siar765/agent-memory/main/docs/banner-light.svg#gh-light-mode-only">
-    <img alt="agent-memory banner" src="https://raw.githubusercontent.com/siar765/agent-memory/main/docs/banner-dark.svg#gh-dark-mode-only">
-  </p>
-
-  <h3 align="center">Your agent shouldn't forget who you are every three weeks</h3>
-
-  <p align="center">
-    <a href="LICENSE"><img src="https://img.shields.io/github/license/siar765/agent-memory?style=flat-square" alt="License"></a>
-    <a href="https://github.com/siar765/agent-memory/releases/tag/v1.0.0-beta.3"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Beta"></a>
-    <a href="#zero-dependencies"><img src="https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square" alt="Zero dependencies"></a>
-    <a href="https://github.com/siar765/agent-memory/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/siar765/agent-memory/test.yml?style=flat-square&label=tests" alt="Tests"></a>
-    <a href="https://github.com/siar765/agent-memory/stargazers"><img src="https://img.shields.io/github/stars/siar765/agent-memory?style=flat-square" alt="Stars"></a>
-    <a href="DISCLAIMER.md"><img src="https://img.shields.io/badge/disclaimer-legal-lightgrey?style=flat-square" alt="Disclaimer"></a>
-  </p>
+<p align="center">
+  <img alt="agent-memory banner" src="https://raw.githubusercontent.com/siar765/agent-memory/main/docs/banner-light.svg#gh-light-mode-only">
+  <img alt="agent-memory banner" src="https://raw.githubusercontent.com/siar765/agent-memory/main/docs/banner-dark.svg#gh-dark-mode-only">
 </p>
 
-**Zero external dependencies.** No vector DB. No cloud service. No hidden state.
-Every memory is a line in a text file you can grep.
+<h3 align="center">Your agent shouldn't forget who you are every three weeks</h3>
 
-**Agent-memory is a structured, editable memory layer for personal AI agents.** It extracts durable facts from conversations — what you like, what you decided, what doesn't work — stores them as typed, confidence-scored entries in plain JSONL, and injects only relevant ones into your agent's system prompt. Your agent remembers you, session after session, without token bloat or black-box vector databases.
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/siar765/agent-memory?style=flat-square" alt="License"></a>
+  <a href="https://github.com/siar765/agent-memory/releases/tag/v1.0.0-beta.4"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Beta"></a>
+  <a href="#zero-dependencies"><img src="https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square" alt="Zero dependencies"></a>
+  <a href="https://github.com/siar765/agent-memory/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/siar765/agent-memory/test.yml?style=flat-square&label=tests" alt="Tests"></a>
+  <a href="https://github.com/siar765/agent-memory/stargazers"><img src="https://img.shields.io/github/stars/siar765/agent-memory?style=flat-square" alt="Stars"></a>
+  <a href="DISCLAIMER.md"><img src="https://img.shields.io/badge/disclaimer-legal-lightgrey?style=flat-square" alt="Disclaimer"></a>
+</p>
+
+**Zero external dependencies. No server. No vector DB. No hidden state.**
+Every memory is a line in a text file you can grep.
 
 ---
 
 ## The problem
 
-When you first start working with an AI agent, it feels like magic. It remembers your preferences, your project decisions, the things you told it last week.
+Every agent memory system promises the same thing — "remember forever." Here's what they don't tell you:
 
-**Three weeks later, it's a stranger.**
+| | agent-memory | mem0 | Graphiti | LangMem | Hy-Memory |
+|---|---|---|---|---|---|
+| **Dependencies** | **Zero** | Chroma/Pinecone + embedding API | Neo4j + infra | Entire LangChain stack | OpenClaw framework |
+| **Install** | `pip install` | sign up + API key + DB setup | docker-compose | pip + 12 deps | framework plugin |
+| **Local-first** | ✅ | ❌ (cloud API) | ❌ (graph server) | ✅ | ✅ |
+| **Editable facts** | ✅ (edit/delete/redact/forget) | ❌ (read-only) | ⚠️ (manual) | ⚠️ (manual) | ❌ |
+| **Evolution chain** | ✅ (supersedes with history) | ❌ | ✅ | ❌ | ✅ |
+| **Review gate** | ✅ (propose→review→accept/reject) | ❌ | ❌ | ❌ | ❌ |
+| **Project isolation** | ✅ (+ global merge, no leaks) | ❌ | ❌ | ❌ | ✅ |
+| **File format** | JSONL — grep/jq/git | proprietary | graph DB | proprietary | proprietary |
+| **Single-user targeted** | ✅ | ❌ (multi-user SaaS) | ❌ (enterprise) | ❌ (framework) | ✅ |
+| **Confidence scoring** | ✅ (0.0-1.0) | ❌ | ❌ | ❌ | ❌ |
+| **Secret redaction** | ✅ (redact command) | ❌ | ❌ | ❌ | ❌ |
+| **Run offline** | ✅ | ❌ | ❌ | ✅ | ✅ |
 
-The agent's context window fills up. Old memories get compressed into a blurry summary. You find yourself repeating things you've already said — *"I told you, I prefer CLI over GUI"* — and the agent nods politely, then forgets again.
-
-Existing memory systems try to solve this, but they're designed for *enterprise multi-user SaaS*, not for one person running an agent on their laptop:
-
-> **mem0** — needs a cloud API, couples you to their platform  
-> **Graphiti** — knowledge graph infra, overkill for personal use  
-> **LangMem** — requires the entire LangChain ecosystem  
-> **Hy-Memory** — locked into OpenClaw framework
-
-What if memory was just... a text file?
+**The others solve "enterprise multi-user memory."** agent-memory solves *your* memory — the person running an agent on their laptop, who just wants their agent to remember what they said last week without spinning up a vector database.
 
 ---
 
@@ -46,10 +47,11 @@ What if memory was just... a text file?
 
 ```bash
 pip install git+https://github.com/siar765/agent-memory.git
-# No server or database required. Extraction requires an LLM API key (see Quick start).
+# No server. No database. No external API for search.
+# Extraction requires an LLM API key (see Quick start).
 ```
 
-Agent-memory is a **local-first, editable memory layer** for personal AI agents. It extracts durable facts from conversations — what you like, what you decided, what doesn't work — and stores them as plain JSONL.
+Agent-memory is a **local-first, editable memory layer for personal AI agents.** It extracts durable facts from conversations — what you like, what you decided, what doesn't work — stores them as typed, confidence-scored entries in plain JSONL, and injects only relevant ones into your agent's system prompt. Your agent remembers you, session after session, without token bloat or black-box vector databases.
 
 ```bash
 # Extract facts from a conversation
@@ -78,7 +80,7 @@ $ agent-memory list
 
 ## What makes it different
 
-**It's just JSONL** — every memory is one line in a text file. You can `grep` it, `jq` it, back it up with `rsync`, version it with git.
+**It's just JSONL** — every memory is one line in a text file. You can `grep` it, `jq` it, back it up with `rsync`, version it with git. No binary blobs, no database dumps, no vendor lock-in.
 
 **6 fact types** — not a blob of text. Every memory knows what it is:
 
@@ -170,7 +172,7 @@ Key design decisions:
 ```bash
 # 1. Install
 pip install git+https://github.com/siar765/agent-memory.git
-export LLM_API_KEY="sk-..."  # any OpenAI-compatible provider
+export LLM_API_KEY="***"  # any OpenAI-compatible provider
 export LLM_MODEL="gpt-4o-mini"
 
 # 2. Extract memories from a conversation
@@ -188,21 +190,6 @@ agent-memory inject --scope project --project blog --limit 10
 agent-memory edit pr:4a1b2c3d --content "Updated preference"
 agent-memory delete pr:obsolete_entry
 ```
-
----
-
-## Comparison
-
-| | agent-memory | mem0 | Graphiti | LangMem | Hy-Memory |
-|---|---|---|---|---|---|
-| Dependencies | **Zero** | cloud API + deps | neo4j + infra | LangChain | OpenClaw |
-| Local-first | ✅ | ❌ | ❌ | ✅ | ✅ |
-| Editable facts | ✅ | ❌ | ⚠️ | ⚠️ | ❌ |
-| Evolution chain | ✅ | ❌ | ✅ | ❌ | ✅ |
-| Review gate (propose→accept/reject) | ✅ | ❌ | ❌ | ❌ | ❌ |
-| Project isolation + global merge | ✅ | ❌ | ❌ | ❌ | ✅ |
-| File format | JSONL (grep-able) | proprietary | graph DB | proprietary | proprietary |
-| Single-user | ✅ (targeted) | ❌ (multi-user) | ❌ (enterprise) | ❌ (framework) | ✅ |
 
 ---
 
