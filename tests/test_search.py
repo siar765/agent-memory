@@ -4,7 +4,7 @@ import tempfile
 
 from agent_memory.core import AtomicFact, FactType, MemoryConfig
 from agent_memory.storage import MemoryStore
-from agent_memory.search import MemorySearch
+from agent_memory.search import MemorySearch, _BM25
 
 
 def _make_search(tmp_dir: str) -> tuple[MemorySearch, MemoryStore]:
@@ -231,3 +231,69 @@ class TestInjectSummary:
             summary = searcher.inject_summary(date_from="2026-06-03")
             assert "double-escapes" in summary
             assert "CLI" not in summary
+
+
+class TestTokenizer:
+    """Tests for _BM25._tokenize CJK support."""
+
+    def test_latin_only(self):
+        tokens = _BM25._tokenize("hello world")
+        assert tokens == ["hello", "world"]
+
+    def test_cjk_individual_chars(self):
+        tokens = _BM25._tokenize("项目")
+        # Individual chars
+        assert "项" in tokens
+        assert "目" in tokens
+
+    def test_cjk_bigrams(self):
+        tokens = _BM25._tokenize("项目隔离")
+        # Bigrams from consecutive CJK chars
+        assert "项目" in tokens
+        assert "目隔" in tokens
+        assert "隔离" in tokens
+
+    def test_mixed_latin_cjk(self):
+        tokens = _BM25._tokenize("用 PostgreSQL 做项目")
+        assert "postgresql" in tokens
+        assert "项目" in tokens
+        assert "做项" in tokens  # CJK bigram crossing "做" + "项"
+
+    def test_cjk_with_punctuation(self):
+        tokens = _BM25._tokenize("测试, hello, 世界")
+        assert "测试" in tokens  # bigram within CJK run before comma
+        assert "世界" in tokens  # bigram within CJK run after comma
+        assert "试世" not in tokens  # comma breaks CJK continuity
+        assert "hello" in tokens
+
+    def test_empty_string(self):
+        assert _BM25._tokenize("") == []
+
+    def test_cjk_only_bigrams(self):
+        """A 4-char CJK string should produce 4 unigrams + 3 bigrams."""
+        tokens = _BM25._tokenize("一二三四")
+        assert len(tokens) == 7  # 4 unigrams + 3 bigrams
+        assert tokens.count("一") == 1
+        assert tokens.count("一二") == 1
+        assert tokens.count("二三") == 1
+        assert tokens.count("三四") == 1
+
+
+class TestSearchEmptyOnNoMatch:
+    """When query is provided and BM25 finds nothing, search() should return empty."""
+
+    def test_search_empty_when_no_match(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            searcher, store = _make_search(tmp)
+            _seed_data(store)
+            # Query that definitely won't match any fact
+            results = searcher.search(query="xyznonexistent12345")
+            assert results == []
+
+    def test_search_still_finds_matching(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            searcher, store = _make_search(tmp)
+            _seed_data(store)
+            results = searcher.search(query="PostgreSQL")
+            assert len(results) >= 1
+            assert "PostgreSQL" in results[0].content

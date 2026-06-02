@@ -22,6 +22,13 @@ from .storage import MemoryStore
 # ==============================================================================
 
 
+def _flush_cjk_bigrams(tokens: list[str], cjk_buf: list[str]) -> None:
+    """Generate CJK bigrams from consecutive character buffer and append to tokens."""
+    if len(cjk_buf) >= 2:
+        for j in range(len(cjk_buf) - 1):
+            tokens.append(cjk_buf[j] + cjk_buf[j + 1])
+
+
 class _BM25:
     """BM25 ranking for term-frequency-aware search.
 
@@ -59,28 +66,31 @@ class _BM25:
         """
         text = text.lower()
         tokens = []
+        buf = []          # Latin word buffer
+        cjk_buf = []      # consecutive CJK character buffer
         i = 0
-        buf = []
         while i < len(text):
             ch = text[i]
             if '\u4e00' <= ch <= '\u9fff' or '\u3000' <= ch <= '\u303f':
-                # Flush any Latin buffer
                 if buf:
                     tokens.append(''.join(buf))
                     buf = []
                 tokens.append(ch)
+                cjk_buf.append(ch)
             elif ch.isalnum():
+                _flush_cjk_bigrams(tokens, cjk_buf)
+                cjk_buf = []
                 buf.append(ch)
             else:
                 if buf:
                     tokens.append(''.join(buf))
                     buf = []
-                if ch in (' ', '\t', '\n', '\r'):
-                    pass  # skip whitespace
-                # skip punctuation
+                _flush_cjk_bigrams(tokens, cjk_buf)
+                cjk_buf = []
             i += 1
         if buf:
             tokens.append(''.join(buf))
+        _flush_cjk_bigrams(tokens, cjk_buf)
         return tokens
 
     def score(self, query_terms: list[str], doc_idx: int) -> float:
@@ -221,9 +231,8 @@ class MemorySearch:
                 ), reverse=True)
                 facts = [r[0] for r in ranked[:limit]]
             else:
-                # Fallback: sort by confidence then recency
-                facts.sort(key=lambda f: (-f.confidence, -f.created_at))
-                facts = facts[:limit]
+                # Search with query but BM25 found nothing relevant — return empty
+                return []
         else:
             # Simple sort: confidence first, then newest
             facts.sort(key=lambda f: (-f.confidence, -f.created_at))

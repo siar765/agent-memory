@@ -71,7 +71,7 @@ $ agent-memory list
  pr:4a1b2c3d    preference   active   "Prefers CLI over GUI for system tasks"
  en:5e6f7a8b    environment  active   "Docker 443 blocked, no git clone over HTTPS"
  dc:9c0d1e2f    decision     active   "Using PostgreSQL for blog project"
- rr:3a4b5c6d    rejection    active   "Ruled out MongoDB — too heavy for NAS"
+ re:3a4b5c6d    rejection    active   "Ruled out MongoDB — too heavy for NAS"
  co:7e8f9a0b    convention   active   "Chinese for design docs, English for code"
  le:1c2d3e4f    lesson       active   "Don't run apt upgrade before cron jobs"
 ```
