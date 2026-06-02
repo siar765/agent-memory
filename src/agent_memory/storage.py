@@ -3,6 +3,8 @@ JSONL-based persistent storage for atomic facts.
 
 Each day's facts live in a separate file. Dedup uses a content-hash
 index to avoid O(n) scans. Written in pure Python — zero dependencies.
+
+Supports CRUD operations: save, load, delete, edit, forget, validate.
 """
 
 from __future__ import annotations
@@ -136,6 +138,248 @@ class MemoryStore:
 
         return facts
 
+    def load_by_id(self, fact_id: str) -> AtomicFact | None:
+        """Load a single fact by its ID.
+
+        Args:
+            fact_id: The fact's unique ID.
+
+        Returns:
+            The AtomicFact if found, None otherwise.
+        """
+        for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if data.get("id") == fact_id:
+                        return AtomicFact.from_dict(data)
+                except (json.JSONDecodeError, KeyError, ValueError):
+                    continue
+        return None
+
+    def delete(self, fact_id: str) -> bool:
+        """Delete a single fact by its ID.
+
+        Removes the matching line from the JSONL file and compact storage.
+
+        Args:
+            fact_id: The fact's unique ID to delete.
+
+        Returns:
+            True if found and deleted, False if not found.
+        """
+        found = False
+        for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
+            lines = path.read_text().splitlines()
+            new_lines = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    if data.get("id") == fact_id:
+                        found = True
+                        continue  # skip this line
+                    new_lines.append(line)
+                except json.JSONDecodeError:
+                    new_lines.append(line)
+
+            if found:
+                with open(path, "w") as f:
+                    _lock_file(f)
+                    try:
+                        f.write("\n".join(new_lines))
+                        if new_lines:
+                            f.write("\n")  # trailing newline
+                    finally:
+                        _unlock_file(f)
+                self._rebuild_index()
+                return True
+
+        return False
+
+    def edit(self, fact_id: str, **updates) -> bool:
+        """Edit fields of an existing fact.
+
+        Args:
+            fact_id: The fact's unique ID to edit.
+            **updates: Fields to update (content, confidence, type, evidence, supersedes).
+
+        Returns:
+            True if found and edited, False if not found.
+        """
+        found = False
+        for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
+            lines = path.read_text().splitlines()
+            new_lines = []
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    if data.get("id") == fact_id:
+                        found = True
+                        # Apply updates
+                        for key, value in updates.items():
+                            if key in ("type", "content", "evidence", "supersedes", "source_date"):
+                                data[key] = value
+                            elif key == "confidence":
+                                data[key] = max(0.0, min(float(value), 1.0))
+                        # Re-serialize
+                        new_lines.append(json.dumps(data, ensure_ascii=False))
+                    else:
+                        new_lines.append(line)
+                except json.JSONDecodeError:
+                    new_lines.append(line)
+
+            if found:
+                with open(path, "w") as f:
+                    _lock_file(f)
+                    try:
+                        f.write("\n".join(new_lines))
+                        if new_lines:
+                            f.write("\n")
+                    finally:
+                        _unlock_file(f)
+                self._rebuild_index()
+                return True
+
+        return False
+
+    def forget(self, query: str) -> int:
+        """Delete all facts matching a keyword query.
+
+        Args:
+            query: Keyword to search in fact content (case-insensitive).
+
+        Returns:
+            Number of facts deleted.
+        """
+        query_lower = query.lower()
+        deleted = 0
+
+        for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
+            lines = path.read_text().splitlines()
+            new_lines = []
+            changed = False
+            for line in lines:
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                    content = (data.get("content", "") + " " + data.get("evidence", "")).lower()
+                    if query_lower in content:
+                        deleted += 1
+                        changed = True
+                        continue
+                    new_lines.append(line)
+                except json.JSONDecodeError:
+                    new_lines.append(line)
+
+            if changed:
+                with open(path, "w") as f:
+                    _lock_file(f)
+                    try:
+                        f.write("\n".join(new_lines))
+                        if new_lines:
+                            f.write("\n")
+                    finally:
+                        _unlock_file(f)
+
+        if deleted > 0:
+            self._rebuild_index()
+
+        return deleted
+
+    def validate(self) -> list[dict]:
+        """Validate storage integrity.
+
+        Checks:
+        - All lines are valid JSON
+        - All entries have required fields
+        - No duplicate IDs
+        - All supersedes references point to existing facts
+
+        Returns:
+            List of issues found (empty = clean).
+        """
+        issues = []
+        all_ids: set[str] = set()
+        supersedes_refs: set[str] = set()
+
+        for path in sorted(self._atoms_dir.glob("*.jsonl")):
+            for line_num, line in enumerate(path.read_text().splitlines(), 1):
+                if not line.strip():
+                    continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError as e:
+                    issues.append({
+                        "file": str(path),
+                        "line": line_num,
+                        "type": "parse_error",
+                        "detail": str(e),
+                    })
+                    continue
+
+                fact_id = data.get("id", "")
+                if not fact_id:
+                    issues.append({
+                        "file": str(path),
+                        "line": line_num,
+                        "type": "missing_id",
+                        "detail": "Fact has no id field",
+                    })
+                elif fact_id in all_ids:
+                    issues.append({
+                        "file": str(path),
+                        "line": line_num,
+                        "type": "duplicate_id",
+                        "detail": f"Duplicate id: {fact_id}",
+                    })
+                else:
+                    all_ids.add(fact_id)
+
+                # Check required fields
+                for field in ("type", "content", "confidence"):
+                    if field not in data:
+                        issues.append({
+                            "file": str(path),
+                            "line": line_num,
+                            "type": "missing_field",
+                            "detail": f"Missing field: {field}",
+                        })
+
+                # Track supersedes references
+                ss = data.get("supersedes", "")
+                if ss:
+                    supersedes_refs.add(ss)
+
+                # Validate type
+                if data.get("type") not in ("preference", "environment", "decision",
+                                              "rejection_reason", "convention", "lesson"):
+                    issues.append({
+                        "file": str(path),
+                        "line": line_num,
+                        "type": "invalid_type",
+                        "detail": f"Unknown type: {data.get('type')}",
+                    })
+
+        # Check supersedes references
+        for ref in supersedes_refs:
+            if ref not in all_ids:
+                issues.append({
+                    "file": "(cross-file)",
+                    "line": 0,
+                    "type": "dangling_supersedes",
+                    "detail": f"supersedes references non-existent id: {ref}",
+                })
+
+        return issues
+
     def stats(self) -> dict:
         """Get storage statistics.
 
@@ -145,6 +389,8 @@ class MemoryStore:
         total = 0
         by_type: dict[str, int] = {}
         total_bytes = 0
+        active = 0
+        superseded = 0
 
         for path in sorted(self._atoms_dir.glob("*.jsonl")):
             total_bytes += path.stat().st_size
@@ -157,11 +403,17 @@ class MemoryStore:
                     data = json.loads(line)
                     t = data.get("type", "unknown")
                     by_type[t] = by_type.get(t, 0) + 1
+                    if data.get("supersedes"):
+                        superseded += 1
+                    else:
+                        active += 1
                 except json.JSONDecodeError:
                     continue
 
         return {
             "total_facts": total,
+            "active_facts": active,
+            "superseded_facts": superseded,
             "by_type": by_type,
             "storage_bytes": total_bytes,
             "data_dir": str(self._atoms_dir),

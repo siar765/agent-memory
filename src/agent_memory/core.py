@@ -87,19 +87,27 @@ class AtomicFact:
     """Unix timestamp of extraction. Auto-set if 0."""
 
     def __post_init__(self):
+        # Convert string type to enum first (needed for id computation)
+        if isinstance(self.type, str):
+            self.type = FactType(self.type)
         if not self.id:
             self.id = self._compute_id()
         if not self.created_at:
             self.created_at = datetime.now(timezone.utc).timestamp()
-        if isinstance(self.type, str):
-            self.type = FactType(self.type)
         # Clamp confidence to valid range [0.0, 1.0]
         self.confidence = max(0.0, min(self.confidence, 1.0))
 
     def _compute_id(self) -> str:
-        """Deterministic ID from normalized content for dedup."""
-        normalized = re.sub(r"\\s+", " ", self.content.lower().strip())
-        return hashlib.sha256(normalized.encode()).hexdigest()[:16]
+        """Deterministic ID from type + normalized content for dedup.
+
+        Format: {type_prefix}:{sha256_content_hash[:14]}
+        The type prefix ensures the same content under different types
+        is treated as different facts.
+        """
+        type_prefix = self.type.value[:2]  # 'pr' for preference, 'en' for environment, etc.
+        normalized = re.sub(r"\s+", " ", self.content.lower().strip())
+        content_hash = hashlib.sha256(normalized.encode()).hexdigest()[:14]
+        return f"{type_prefix}:{content_hash}"
 
     def to_dict(self) -> dict:
         """Serialize to JSON-compatible dict."""
@@ -116,7 +124,10 @@ class AtomicFact:
 
     @classmethod
     def from_dict(cls, data: dict) -> "AtomicFact":
-        """Deserialize from a dict (e.g., loaded from JSONL)."""
+        """Deserialize from a dict (e.g., loaded from JSONL).
+
+        Handles legacy IDs (old format without type prefix) gracefully.
+        """
         return cls(
             type=FactType(data["type"]),
             content=data["content"],
