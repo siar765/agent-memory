@@ -15,6 +15,7 @@ evolution-tracked facts — and forgets the rest.
   <a href="https://pypi.org/project/agent-memory/"><img src="https://img.shields.io/pypi/v/agent-memory?style=flat-square&color=blue" alt="PyPI"></a>
   <a href="#"><img src="https://img.shields.io/pypi/pyversions/agent-memory?style=flat-square" alt="Python versions"></a>
   <a href="LICENSE"><img src="https://img.shields.io/github/license/siar765/agent-memory?style=flat-square" alt="License"></a>
+  <a href="https://github.com/siar765/agent-memory/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/siar765/agent-memory/test.yml?style=flat-square&label=tests" alt="Tests"></a>
   <a href="https://github.com/siar765/agent-memory/stargazers"><img src="https://img.shields.io/github/stars/siar765/agent-memory?style=flat-square" alt="Stars"></a>
   <a href="#"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Status"></a>
   <a href="SECURITY.md"><img src="https://img.shields.io/badge/security-policy-blue?style=flat-square" alt="Security"></a>
