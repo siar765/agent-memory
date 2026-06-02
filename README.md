@@ -19,6 +19,8 @@
 **Zero external dependencies.** No vector DB. No cloud service. No hidden state.
 Every memory is a line in a text file you can grep.
 
+**Agent-memory is a structured, editable memory layer for personal AI agents.** It extracts durable facts from conversations — what you like, what you decided, what doesn't work — stores them as typed, confidence-scored entries in plain JSONL, and injects only relevant ones into your agent's system prompt. Your agent remembers you, session after session, without token bloat or black-box vector databases.
+
 ---
 
 ## The problem
