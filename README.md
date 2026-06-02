@@ -283,7 +283,7 @@ No database required. You can read, edit, or back them up with any text tool.
 ## Production Use
 
 Agent-memory has been running 24/7 in production since May 2026, powering
-80+ automated tasks daily on a $200 NAS. Metrics from real operation:
+80+ automated tasks daily on entry-level hardware. Metrics from real operation:
 
 - **~25 facts extracted per day** from daily conversation summaries
 - **~92% of extracted facts** have confidence ≥ 0.8 (injection-worthy)

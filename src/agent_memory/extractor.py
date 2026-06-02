@@ -86,8 +86,8 @@ TYPE 2: environment — System constraints, network, hardware, tool availability
 [2] User: "We're running Python 3.11, can't upgrade."
     → {"type":"environment", "content":"System runs Python 3.11, upgrade not possible", "confidence":1.0, "evidence":"User: We're running Python 3.11, can't upgrade"}
 
-[3] User: "The NAS has an N100 processor with 8GB RAM."
-    → {"type":"environment", "content":"NAS has Intel N100 processor with 8GB RAM", "confidence":1.0, "evidence":"User: The NAS has an N100 processor with 8GB RAM"}
+[3] User: "The NAS has an Celeron N5095 with 8GB RAM."
+    → {"type":"environment", "content":"NAS has Intel Celeron N5095 with 8GB RAM", "confidence":1.0, "evidence":"User: The NAS has an N100 processor with 8GB RAM"}
 
 [4] User: "GitHub doesn't have fork/create permissions on this token."
     → {"type":"environment", "content":"GitHub token lacks fork and create repository permissions", "confidence":1.0, "evidence":"User: GitHub doesn't have fork/create permissions on this token"}
