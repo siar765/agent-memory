@@ -34,6 +34,10 @@ Usage::
     agent-memory summarize
     agent-memory summarize --topic CLI --min-confidence 0.8
     agent-memory summarize --format text --save
+
+    # Trace evolution history
+    agent-memory history <id>
+    agent-memory history --query "dark mode"
 """
 
 from __future__ import annotations
@@ -464,21 +468,15 @@ def cmd_validate(args: list[str]) -> None:
 
 
 def cmd_summarize(args: list[str]) -> None:
-    """Generate a user profile from preference facts.
-
-    Groups preference facts by topic (UI, Interface, Dietary, etc.)
-    and produces a readable profile — no LLM call, pure rule-based.
-    """
+    """Generate a user profile from preference facts."""
     import argparse
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--topic", default="", help="Filter to a specific topic")
     parser.add_argument("--min-confidence", type=float, default=0.7)
     parser.add_argument("--format", choices=["markdown", "text"], default="markdown")
-    parser.add_argument(
-        "--save", action="store_true",
-        help="Save profile to {data_dir}/profile.md"
-    )
+    parser.add_argument("--save", action="store_true",
+                        help="Save profile to {data_dir}/profile.md")
     opts = parser.parse_args(args)
 
     config = _build_config()
@@ -504,6 +502,36 @@ def cmd_summarize(args: list[str]) -> None:
         profile_path.parent.mkdir(parents=True, exist_ok=True)
         profile_path.write_text(result)
         print(f"[agent-memory] Profile saved to: {profile_path}")
+
+
+def cmd_history(args: list[str]) -> None:
+    """Trace the evolution history of a fact or facts matching a query."""
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("id", nargs="?", default="",
+                        help="Fact ID to trace")
+    parser.add_argument("--query", default="",
+                        help="Search keyword to find facts")
+    parser.add_argument("--limit", type=int, default=5,
+                        help="Max results when searching by query")
+    opts = parser.parse_args(args)
+
+    if not opts.id and not opts.query:
+        print("[agent-memory] Usage: agent-memory history <id> or agent-memory history --query <keyword>")
+        return
+
+    config = _build_config()
+    store = MemoryStore(config)
+    searcher = MemorySearch(store)
+
+    result = searcher.history(
+        fact_id=opts.id,
+        query=opts.query,
+        limit=opts.limit,
+    )
+
+    print(result)
 
 
 def cmd_redact(args: list[str]) -> None:
@@ -533,7 +561,7 @@ def main() -> None:
                         choices=["extract", "search", "inject", "stats",
                                  "list", "show", "delete", "edit",
                                  "forget", "validate", "redact",
-                                 "summarize"])
+                                 "summarize", "history"])
     args, remaining = parser.parse_known_args()
 
     if not args.command:
@@ -553,6 +581,7 @@ def main() -> None:
         "validate": cmd_validate,
         "redact": cmd_redact,
         "summarize": cmd_summarize,
+        "history": cmd_history,
     }
 
     commands[args.command](remaining)

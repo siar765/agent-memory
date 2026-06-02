@@ -498,6 +498,135 @@ class MemorySearch:
 
         return summary
 
+    def history(self, fact_id: str = "",
+                query: str = "", limit: int = 5) -> str:
+        """Trace the evolution history of a fact or set of facts.
+
+        Walks the ``supersedes`` chain forward and backward to show
+        how a fact evolved over time. Can start from a specific ID
+        or search by keyword.
+
+        Args:
+            fact_id: Specific fact ID to trace.
+            query: Search keyword to find facts first.
+            limit: Max results when searching by query (default 5).
+
+        Returns:
+            Formatted evolution timeline string, or empty if not found.
+        """
+        # Load all facts to build lookup maps
+        all_facts = self.store.load(active_only=False)
+        if not all_facts:
+            return "[agent-memory] No facts in storage"
+
+        by_id: dict[str, AtomicFact] = {}
+        by_supersedes: dict[str, list[AtomicFact]] = {}  # old_id -> [newer facts]
+        for f in all_facts:
+            by_id[f.id] = f
+            if f.supersedes:
+                by_supersedes.setdefault(f.supersedes, []).append(f)
+
+        # ── Find starting facts ────────────────────────────────────────
+        start_ids: list[str] = []
+
+        if fact_id:
+            if fact_id not in by_id:
+                return f"[agent-memory] Fact not found: {fact_id}"
+            start_ids = [fact_id]
+        elif query:
+            ql = query.lower()
+            matches = [f for f in all_facts if ql in f.content.lower()]
+            if not matches:
+                return f"[agent-memory] No facts matching: {query}"
+            # Prefer active, then high confidence
+            matches.sort(key=lambda f: (f.status != "active", -f.confidence))
+            start_ids = [f.id for f in matches[:limit]]
+
+        # ── Walk chain backward (find root) ───────────────────────────
+        # For each start ID, walk backwards to the oldest version
+        def walk_backward(fid: str, visited: set[str]) -> list[AtomicFact]:
+            chain = []
+            current = by_id.get(fid)
+            while current:
+                if current.id in visited:
+                    break  # cycle detected
+                visited.add(current.id)
+                chain.append(current)
+                # Try finding what this fact supersedes
+                ss = current.supersedes
+                if ss and ss in by_id:
+                    current = by_id[ss]
+                else:
+                    current = None
+            chain.reverse()  # oldest first
+            return chain
+
+        visited: set[str] = set()
+        all_chains: list[list[AtomicFact]] = []
+
+        for sid in start_ids:
+            if sid in visited:
+                continue
+            chain = walk_backward(sid, visited)
+
+            # Also walk forward (find newer versions)
+            def walk_forward(facts: list[AtomicFact], forward_visited: set[str]) -> list[AtomicFact]:
+                # Start from the root (first in reversed chain)
+                current_id = facts[-1].id
+                while True:
+                    if current_id in forward_visited:
+                        break
+                    forward_visited.add(current_id)
+                    successors = by_supersedes.get(current_id, [])
+                    if not successors:
+                        break
+                    # If multiple successors, only follow the first
+                    succ = successors[0]
+                    if succ.id not in by_id:
+                        break
+                    facts.append(succ)
+                    current_id = succ.id
+                return facts
+
+            forward_visited: set[str] = set()
+            chain = walk_forward(chain, forward_visited)
+
+            all_chains.append(chain)
+
+        # ── Format output ──────────────────────────────────────────────
+        lines = ["## Evolution History"]
+
+        for chain in all_chains:
+            lines.append("")
+            for i, fact in enumerate(chain):
+                if i == 0 and len(chain) > 1:
+                    marker = "🟢" if fact.status == "active" else "🔴"
+                    label = "origin"
+                elif i == len(chain) - 1 and len(chain) > 1:
+                    marker = "🟢" if fact.status == "active" else "🔴"
+                    label = "current"
+                else:
+                    marker = "🟡" if fact.status == "active" else "🔴"
+                    label = "v" + str(i)
+
+                status_tag = f"[{fact.status}]" if fact.status != "active" else ""
+                lines.append(
+                    f"{marker} **{label}** — "
+                    f"{fact.type.value} | {int(fact.confidence * 100)}% "
+                    f"{status_tag}"
+                )
+                lines.append(f"   `{fact.content[:100]}`")
+                if fact.evidence and fact.evidence != "[REDACTED]":
+                    lines.append(f"   ↳ {fact.evidence[:80]}")
+
+        if not all_chains:
+            return ""
+
+        lines.append("")
+        lines.append(f"*Traced {len(all_chains)} chain(s) from {len(all_facts)} total facts*")
+
+        return "\n".join(lines)
+
 
 # ==============================================================================
 # Scoring helpers
