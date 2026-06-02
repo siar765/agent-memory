@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="LICENSE"><img src="https://img.shields.io/github/license/siar765/agent-memory?style=flat-square" alt="License"></a>
-  <a href="https://github.com/siar765/agent-memory/releases/tag/v1.0.0-beta.4"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Beta"></a>
+  <a href="https://github.com/siar765/agent-memory/releases/tag/v1.0.0-beta.5"><img src="https://img.shields.io/badge/status-beta-yellow?style=flat-square" alt="Beta"></a>
   <a href="#zero-dependencies"><img src="https://img.shields.io/badge/dependencies-zero-brightgreen?style=flat-square" alt="Zero dependencies"></a>
   <a href="https://github.com/siar765/agent-memory/actions/workflows/test.yml"><img src="https://img.shields.io/github/actions/workflow/status/siar765/agent-memory/test.yml?style=flat-square&label=tests" alt="Tests"></a>
   <a href="https://github.com/siar765/agent-memory/stargazers"><img src="https://img.shields.io/github/stars/siar765/agent-memory?style=flat-square" alt="Stars"></a>
