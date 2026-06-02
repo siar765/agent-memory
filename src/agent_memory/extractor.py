@@ -58,6 +58,9 @@ Rules:
 class FactExtractor:
     """Extracts AtomicFacts from conversation text using an LLM."""
 
+    MIN_CONFIDENCE = 0.7
+    """Hard threshold: facts below this are discarded, regardless of what the model says."""
+
     def __init__(self, config: MemoryConfig):
         self.config = config
 
@@ -154,10 +157,16 @@ class FactExtractor:
             except ValueError:
                 continue
 
+            confidence = min(float(item.get("confidence", 0.8)), 1.0)
+
+            # Hard confidence gate — don't trust the model's judgment below 0.7
+            if confidence < self.MIN_CONFIDENCE:
+                continue
+
             atoms.append(AtomicFact(
                 type=fact_type,
                 content=str(item["content"])[:self.config.max_fact_length],
-                confidence=min(float(item.get("confidence", 0.8)), 1.0),
+                confidence=confidence,
                 evidence=str(item.get("evidence", "")),
             ))
 

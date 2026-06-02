@@ -9,11 +9,30 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
 from .core import AtomicFact, MemoryConfig
+
+# File locking for concurrent write safety — optional, no external deps
+try:
+    import fcntl
+
+    def _lock_file(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+
+    def _unlock_file(f):
+        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+
+except ImportError:
+    # Fallback: no locking (Windows or restricted environments)
+    def _lock_file(f):
+        pass
+
+    def _unlock_file(f):
+        pass
 
 
 class MemoryStore:
@@ -66,12 +85,16 @@ class MemoryStore:
         if not new_facts:
             return 0
 
-        # Append to daily file
+        # Append to daily file with lock
         with open(path, "a") as f:
-            for fact in new_facts:
-                fact.source_date = date_str
-                f.write(json.dumps(fact.to_dict(), ensure_ascii=False) + "\n")
-                self._dedup_index.add(fact.id)
+            _lock_file(f)
+            try:
+                for fact in new_facts:
+                    fact.source_date = date_str
+                    f.write(json.dumps(fact.to_dict(), ensure_ascii=False) + "\n")
+                    self._dedup_index.add(fact.id)
+            finally:
+                _unlock_file(f)
 
         return len(new_facts)
 

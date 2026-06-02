@@ -93,6 +93,8 @@ class AtomicFact:
             self.created_at = datetime.now(timezone.utc).timestamp()
         if isinstance(self.type, str):
             self.type = FactType(self.type)
+        # Clamp confidence to valid range [0.0, 1.0]
+        self.confidence = max(0.0, min(self.confidence, 1.0))
 
     def _compute_id(self) -> str:
         """Deterministic ID from normalized content for dedup."""
