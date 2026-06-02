@@ -38,6 +38,10 @@ Usage::
     # Trace evolution history
     agent-memory history <id>
     agent-memory history --query "dark mode"
+
+    # Propose a new fact (low confidence, requires review)
+    agent-memory propose "User checks crypto prices daily" --type convention
+    agent-memory list --status proposed
 """
 
 from __future__ import annotations
@@ -45,7 +49,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from .core import MemoryConfig
+from .core import AtomicFact, FactType, MemoryConfig
 from .extractor import FactExtractor, FactExtractorError, ParseError
 from .storage import MemoryStore
 from .search import MemorySearch
@@ -504,6 +508,57 @@ def cmd_summarize(args: list[str]) -> None:
         print(f"[agent-memory] Profile saved to: {profile_path}")
 
 
+def cmd_propose(args: list[str]) -> None:
+    """Save a proposed fact (low confidence, status=proposed).
+
+    Proposed facts are excluded from inject by default until reviewed
+    and promoted to active. Use for auto-detected patterns, behavioral
+    observations, or anything that needs human confirmation first.
+    """
+    import argparse
+    from datetime import datetime, timezone
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--type", default="convention",
+                        choices=["preference", "environment", "decision",
+                                 "rejection_reason", "convention", "lesson"])
+    parser.add_argument("--confidence", type=float, default=0.6)
+    parser.add_argument("--evidence", default="")
+    parser.add_argument("--scope", default="global")
+    parser.add_argument("--project", default="")
+    parser.add_argument("content", nargs="*",
+                        help="The fact content (accepts multiple words)")
+    opts = parser.parse_args(args)
+
+    content = " ".join(opts.content).strip()
+    if not content:
+        print("[agent-memory] Usage: agent-memory propose <fact content> [--type convention]")
+        return
+
+    config = _build_config()
+    store = MemoryStore(config)
+
+    fact = AtomicFact(
+        type=FactType(opts.type),
+        content=content,
+        confidence=max(0.0, min(opts.confidence, 0.8)),  # cap at 0.8 for proposals
+        evidence=opts.evidence or "(auto-detected, pending review)",
+        source_date=datetime.now(timezone.utc).strftime("%Y-%m-%d"),
+        scope=opts.scope,
+        project=opts.project,
+        status="proposed",
+    )
+
+    saved = store.save([fact])
+    if saved:
+        print(f"[agent-memory] Proposed fact saved: {fact.id}")
+        print(f"  Type: {fact.type.value} | Confidence: {int(fact.confidence * 100)}% | Status: proposed")
+        print(f"  Content: {fact.content}")
+        print(f"  Review: agent-memory edit {fact.id} --status active --confidence 0.9")
+    else:
+        print("[agent-memory] Duplicate — fact already exists")
+
+
 def cmd_history(args: list[str]) -> None:
     """Trace the evolution history of a fact or facts matching a query."""
     import argparse
@@ -561,7 +616,7 @@ def main() -> None:
                         choices=["extract", "search", "inject", "stats",
                                  "list", "show", "delete", "edit",
                                  "forget", "validate", "redact",
-                                 "summarize", "history"])
+                                 "summarize", "history", "propose"])
     args, remaining = parser.parse_known_args()
 
     if not args.command:
@@ -582,6 +637,7 @@ def main() -> None:
         "redact": cmd_redact,
         "summarize": cmd_summarize,
         "history": cmd_history,
+        "propose": cmd_propose,
     }
 
     commands[args.command](remaining)
