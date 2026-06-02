@@ -11,7 +11,7 @@ from .extractor import FactExtractor, FactExtractorError, APIError, RateLimitErr
 from .storage import MemoryStore
 from .search import MemorySearch
 
-__version__ = "0.2.0"
+__version__ = "0.2.1"
 
 __all__ = [
     "AtomicFact", "FactType", "MemoryConfig",

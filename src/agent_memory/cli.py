@@ -29,6 +29,11 @@ Usage::
 
     # View stats
     agent-memory stats
+
+    # Generate user profile from preference facts
+    agent-memory summarize
+    agent-memory summarize --topic CLI --min-confidence 0.8
+    agent-memory summarize --format text --save
 """
 
 from __future__ import annotations
@@ -458,6 +463,49 @@ def cmd_validate(args: list[str]) -> None:
         print(f"  [{issue['type']:20s}] {issue.get('file', '')}:{issue.get('line', '')} — {issue['detail']}")
 
 
+def cmd_summarize(args: list[str]) -> None:
+    """Generate a user profile from preference facts.
+
+    Groups preference facts by topic (UI, Interface, Dietary, etc.)
+    and produces a readable profile — no LLM call, pure rule-based.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--topic", default="", help="Filter to a specific topic")
+    parser.add_argument("--min-confidence", type=float, default=0.7)
+    parser.add_argument("--format", choices=["markdown", "text"], default="markdown")
+    parser.add_argument(
+        "--save", action="store_true",
+        help="Save profile to {data_dir}/profile.md"
+    )
+    opts = parser.parse_args(args)
+
+    config = _build_config()
+    store = MemoryStore(config)
+    searcher = MemorySearch(store)
+
+    result = searcher.summarize(
+        topic=opts.topic,
+        min_confidence=opts.min_confidence,
+        fmt=opts.format,
+    )
+
+    if not result:
+        print("[agent-memory] No preference facts found at the configured threshold")
+        return
+
+    print(result)
+
+    if opts.save:
+        from pathlib import Path
+        import os
+        profile_path = Path(os.path.expanduser(config.data_dir)) / "profile.md"
+        profile_path.parent.mkdir(parents=True, exist_ok=True)
+        profile_path.write_text(result)
+        print(f"[agent-memory] Profile saved to: {profile_path}")
+
+
 def cmd_redact(args: list[str]) -> None:
     """Redact evidence text from a fact."""
     if not args:
@@ -484,7 +532,8 @@ def main() -> None:
     parser.add_argument("command", nargs="?",
                         choices=["extract", "search", "inject", "stats",
                                  "list", "show", "delete", "edit",
-                                 "forget", "validate", "redact"])
+                                 "forget", "validate", "redact",
+                                 "summarize"])
     args, remaining = parser.parse_known_args()
 
     if not args.command:
@@ -503,6 +552,7 @@ def main() -> None:
         "forget": cmd_forget,
         "validate": cmd_validate,
         "redact": cmd_redact,
+        "summarize": cmd_summarize,
     }
 
     commands[args.command](remaining)

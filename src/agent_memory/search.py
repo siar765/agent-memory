@@ -334,10 +334,183 @@ class MemorySearch:
         """Quick lookup: get facts of a specific type."""
         return self.search(fact_type=fact_type, limit=limit, use_bm25=False)
 
+    def _profile_topic_groups(self, facts: list[AtomicFact]) -> tuple[dict[str, list[AtomicFact]], list[AtomicFact]]:
+        """Assign preference facts to topic groups by keyword matching.
+
+        Returns:
+            (assigned: dict[topic_name -> facts], unassigned: list[facts])
+        """
+        topics = [
+            {"name": "UI Theme",
+             "keywords": ["dark mode", "light mode", "theme", "dark", "light",
+                          "白天", "黑夜", "主题", "深色"]},
+            {"name": "Interface",
+             "keywords": ["cli", "gui", "terminal", "command line", "command-line",
+                          "命令行", "界面", "tui"]},
+            {"name": "Editor & IDE",
+             "keywords": ["vim", "neovim", "nvim", "vs code", "vscode",
+                          "emacs", "editor", "ide", "编辑器", "ide"]},
+            {"name": "Programming Language",
+             "keywords": ["python", "rust", "go", "golang", "javascript",
+                          "typescript", "java", "c++", "c#", "ruby", "php",
+                          "语言", "编程"]},
+            {"name": "Communication",
+             "keywords": ["concise", "brief", "verbose", "detailed", "short",
+                          "简洁", "详细", "长", "短", "废话", "啰嗦"]},
+            {"name": "Dietary",
+             "keywords": ["coffee", "tea", "drink", "americano", "latte",
+                          "cappuccino", "ruixing", "瑞幸", "咖啡", "茶",
+                          "美式", "黑咖啡", "不加糖", "无糖", "纯"]},
+            {"name": "OS & Platform",
+             "keywords": ["linux", "macos", "windows", "debian", "ubuntu",
+                          "arch", "fedora", "系统", "操作系统"]},
+            {"name": "Deployment",
+             "keywords": ["docker", "kubernetes", "k8s", "container",
+                          "部署", "容器"]},
+            {"name": "Cost & Licensing",
+             "keywords": ["free", "open source", "paid", "cost", "cheap",
+                          "expensive", "免费", "开源", "付费", "贵", "便宜",
+                          "白嫖", "bug 价"]},
+            {"name": "Testing",
+             "keywords": ["test", "tdd", "unit test", "testing", "测试",
+                          "单元测试"]},
+        ]
+
+        assigned: dict[str, list[AtomicFact]] = {}
+        unassigned: list[AtomicFact] = []
+
+        for fact in facts:
+            content_lower = fact.content.lower()
+            matched = False
+            for t in topics:
+                if any(kw in content_lower for kw in t["keywords"]):
+                    assigned.setdefault(t["name"], []).append(fact)
+                    matched = True
+                    break
+            if not matched:
+                unassigned.append(fact)
+
+        return assigned, unassigned, topics
+
+    def summarize(
+        self,
+        topic: str = "",
+        min_confidence: float = 0.7,
+        fmt: str = "markdown",
+    ) -> str:
+        """Generate a readable user profile from preference facts.
+
+        Groups preference facts by detected topic and generates
+        natural-language summary sentences — pure rule-based, zero dependencies.
+
+        Args:
+            topic: Filter to a specific topic (case-insensitive keyword match).
+            min_confidence: Minimum confidence threshold (default 0.7).
+            fmt: Output format — ``markdown`` or ``text``.
+
+        Returns:
+            Formatted profile string, or empty string if no preferences found.
+        """
+        facts = self.store.load(fact_type="preference", active_only=True)
+        if not facts:
+            return ""
+
+        facts = [f for f in facts if f.confidence >= min_confidence]
+        if not facts:
+            return ""
+
+        facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+        assigned, unassigned, topics = self._profile_topic_groups(facts)
+
+        if topic:
+            topic_lower = topic.lower()
+            matched_name = None
+            for t in topics:
+                if topic_lower in t["name"].lower():
+                    matched_name = t["name"]
+                    break
+            if matched_name:
+                assigned = {matched_name: assigned.get(matched_name, [])}
+                unassigned = []
+            else:
+                # Search all facts (assigned + unassigned) by content keyword
+                topic_keywords = topic_lower.split()
+                all_facts = list(unassigned)
+                for g in assigned.values():
+                    all_facts.extend(g)
+                filtered = [
+                    f for f in all_facts
+                    if any(kw in f.content.lower() for kw in topic_keywords)
+                ]
+                assigned = {}
+                unassigned = filtered
+
+        lines: list[str] = []
+        if fmt == "text":
+            lines.append("User Profile")
+            lines.append("=" * 40)
+        else:
+            lines.append("## User Profile")
+
+        for topic_name in [t["name"] for t in topics]:
+            group = assigned.get(topic_name, [])
+            if not group:
+                continue
+
+            if fmt == "text":
+                lines.append(f"\n{topic_name}:")
+            else:
+                lines.append(f"\n**{topic_name}**")
+
+            high = [f for f in group if f.confidence >= 0.9]
+            medium = [f for f in group if f.confidence < 0.9]
+
+            if high:
+                text = ". ".join(
+                    f.content.rstrip(".") for f in high[:3]
+                ) + "."
+                lines.append(_fmt_bullet(text, fmt))
+            if medium:
+                text = ". ".join(
+                    f.content.rstrip(".") for f in medium[:2]
+                ) + "."
+                lines.append(_fmt_bullet(text, fmt))
+
+        if unassigned:
+            if fmt == "text":
+                lines.append("\nOther:")
+            else:
+                lines.append("\n**Other**")
+            for f in unassigned[:5]:
+                lines.append(
+                    _fmt_bullet(f"{f.content} ({int(f.confidence * 100)}%)", fmt)
+                )
+
+        if len(lines) <= 2:
+            return ""
+
+        summary = "\n".join(lines) + "\n"
+        if fmt == "text":
+            summary += f"\n{'=' * 40}\n"
+            summary += f"Based on {len(facts)} preferences, threshold \u2265{int(min_confidence * 100)}%\n"
+        else:
+            summary += f"\n*({len(facts)} preferences, \u2265{int(min_confidence * 100)}% confidence)*\n"
+
+        return summary
+
 
 # ==============================================================================
 # Scoring helpers
 # ==============================================================================
+
+
+def _fmt_bullet(text: str, fmt: str) -> str:
+    """Format a single bullet item."""
+    prefix = "" if fmt == "text" else "- "
+    return f"{prefix}{text}"
+
+
+
 
 
 def _recency_score(fact: AtomicFact) -> float:
