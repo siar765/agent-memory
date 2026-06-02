@@ -374,19 +374,24 @@ def cmd_show(args: list[str]) -> None:
 
 
 def cmd_delete(args: list[str]) -> None:
-    """Delete a fact by ID."""
-    if not args:
-        print("[agent-memory] Usage: agent-memory delete <id>", file=sys.stderr)
-        sys.exit(1)
+    """Delete a fact by ID. Default is soft delete (marks as wrong)."""
+    import argparse
 
-    fact_id = args[0]
+    parser = argparse.ArgumentParser()
+    parser.add_argument("id", help="Fact ID to delete")
+    parser.add_argument("--hard", action="store_true", help="Physically remove the line (default: soft delete)")
+    opts = parser.parse_args(args)
+
     config = _build_config()
     store = MemoryStore(config)
 
-    if store.delete(fact_id):
-        print(f"[agent-memory] Deleted fact: {fact_id}")
+    if store.delete(opts.id, hard=opts.hard):
+        if opts.hard:
+            print(f"[agent-memory] Permanently deleted fact: {opts.id}")
+        else:
+            print(f"[agent-memory] Soft-deleted fact: {opts.id} (status set to wrong)")
     else:
-        print(f"[agent-memory] Fact not found: {fact_id}")
+        print(f"[agent-memory] Fact not found: {opts.id}")
 
 
 def cmd_edit(args: list[str]) -> None:

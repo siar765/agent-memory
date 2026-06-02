@@ -67,7 +67,7 @@ SECRET_PATTERNS = [
     re.compile(r"AKIA[0-9A-Z]{16}"),  # AWS access keys
     re.compile(r"(?i)(?:password|passwd|secret|token|private[_-]?key)\s*[:=]\s*\S{8,}"),  # creds
     re.compile(r"-----BEGIN\s+(?:RSA\s+PRIVATE|EC\s+PRIVATE|DSA\s+PRIVATE|OPENSSH\s+PRIVATE|PRIVATE)\s+KEY-----"),  # private keys
-    re.compile(r"\b[0-9a-fA-F]{32,}\b"),  # likely tokens/hashes (32+ hex chars)
+    re.compile(r"(?i)(?:token|secret|key|password|session|auth|credential|cookie|api[_-]?key)\s*[=:""]\s*[0-9a-fA-F]{16,}"),  # hex creds with context
 ]
 
 
@@ -291,17 +291,47 @@ class MemoryStore:
                     continue
         return None
 
-    def delete(self, fact_id: str) -> bool:
+    def delete(self, fact_id: str, hard: bool = False) -> bool:
         """Delete a single fact by its ID.
 
-        Removes the matching line from the JSONL file via atomic rewrite.
+        By default performs a **soft delete** — sets status to ``wrong``
+        so the fact is excluded from search/inject but its ID remains
+        valid for any ``supersedes`` references from newer facts.
+
+        Use ``--hard`` for physical removal from the JSONL file.
+        Hard delete checks for dangling ``supersedes`` references first
+        and refuses if other facts point to this ID.
 
         Args:
             fact_id: The fact's unique ID to delete.
+            hard: If True, physically remove the line (default: False).
 
         Returns:
             True if found and deleted, False if not found.
         """
+        if not hard:
+            # Soft delete: set status to wrong
+            return self.edit(fact_id, status="wrong")
+
+        # Hard delete: check for dangling supersedes first
+        for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
+            for line in path.read_text().splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if data.get("supersedes") == fact_id:
+                        referrer = data.get("id", "unknown")
+                        print(
+                            f"[agent-memory] Refusing hard delete: fact {fact_id} is "
+                            f"superseded by {referrer}. Edit the newer fact first.",
+                            file=sys.stderr,
+                        )
+                        return False
+                except json.JSONDecodeError:
+                    continue
+
         found = False
         with _global_lock(self._atoms_dir):
             for path in sorted(self._atoms_dir.glob("*.jsonl"), reverse=True):
@@ -395,6 +425,17 @@ class MemoryStore:
                                     project=new_data.get("project", ""),
                                 )
                                 new_data["id"] = tmp.id
+
+                                # Check for duplicate: the new content already exists
+                                if new_data["id"] in self._dedup_index and new_data["id"] != fact_id:
+                                    print(
+                                        f"[agent-memory] Target fact already exists with ID: {new_data['id']}. "
+                                        f"Edit aborted to prevent duplicate.",
+                                        file=sys.stderr,
+                                    )
+                                    # Remove the marked superseded line we added
+                                    new_lines.pop()
+                                    return False
 
                                 new_lines.append(json.dumps(new_data, ensure_ascii=False))
                             else:
@@ -620,10 +661,11 @@ class MemoryStore:
                     p = data.get("project", "") or "(none)"
                     by_project[p] = by_project.get(p, 0) + 1
 
-                    if data.get("supersedes"):
-                        superseded += 1
-                    else:
+                    st = data.get("status", "active")
+                    if st == "active":
                         active += 1
+                    elif st == "superseded":
+                        superseded += 1
                 except json.JSONDecodeError:
                     continue
 
