@@ -67,6 +67,8 @@ def _build_config() -> MemoryConfig:
     """Build config from environment variables with sensible defaults."""
     import os
 
+    half_life = os.environ.get("AGENT_MEMORY_HALF_LIFE", "30")
+
     return MemoryConfig(
         data_dir=os.environ.get("AGENT_MEMORY_DIR", "~/.agent/memory"),
         llm_api_key=os.environ.get("LLM_API_KEY", ""),
@@ -75,6 +77,7 @@ def _build_config() -> MemoryConfig:
             os.environ.get("OPENAI_API_BASE", "https://api.openai.com/v1/chat/completions"),
         ),
         llm_model=os.environ.get("LLM_MODEL", "gpt-4o-mini"),
+        confidence_half_life_days=float(half_life),   # ← 新增
     )
 
 
@@ -190,6 +193,8 @@ def cmd_search(args: list[str]) -> None:
     parser.add_argument("--min-confidence", type=float, default=0.0)
     parser.add_argument("--all", action="store_true", help="Include non-active facts (wrong, archived, superseded, proposed)")
     parser.add_argument("--no-bm25", action="store_true", help="Disable BM25 ranking")
+    parser.add_argument("--no-confidence-decay", action="store_true",
+                        help="Use raw confidence instead of time-decayed confidence")
     opts = parser.parse_args(args)
 
     config = _build_config()
@@ -206,6 +211,7 @@ def cmd_search(args: list[str]) -> None:
         limit=opts.limit,
         min_confidence=opts.min_confidence,
         use_bm25=not opts.no_bm25,
+        use_confidence_decay=not opts.no_confidence_decay,   # ← 新增
     )
 
     if not facts:
@@ -234,6 +240,8 @@ def cmd_inject(args: list[str]) -> None:
     parser.add_argument("--all", action="store_true", help="Include non-active facts too")
     parser.add_argument("--include-global", action="store_true",
                         help="Also include global preferences (auto-enabled when --project is set without --scope)")
+    parser.add_argument("--no-confidence-decay", action="store_true",
+                        help="Use raw confidence instead of time-decayed confidence")
     opts = parser.parse_args(args)
 
     config = _build_config()
@@ -249,6 +257,7 @@ def cmd_inject(args: list[str]) -> None:
         scope=opts.scope,
         project=opts.project,
         include_global=opts.include_global,
+        use_confidence_decay=not opts.no_confidence_decay,   # ← 新增
     )
 
     if summary:

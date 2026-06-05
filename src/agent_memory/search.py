@@ -170,6 +170,7 @@ class MemorySearch:
         limit: int = 10,
         min_confidence: float = 0.0,
         use_bm25: bool = True,
+        use_confidence_decay: bool = True,
     ) -> list[AtomicFact]:
         """Search facts with optional BM25 ranking.
 
@@ -189,6 +190,7 @@ class MemorySearch:
             limit: Maximum results to return.
             min_confidence: Minimum confidence threshold.
             use_bm25: Enable BM25 term-frequency ranking (default: True).
+            use_confidence_decay: Apply time-based decay to confidence (default: True).
 
         Returns:
             Matched facts sorted by relevance.
@@ -206,9 +208,13 @@ class MemorySearch:
         if not facts:
             return []
 
-        # Apply confidence filter
+        # Apply confidence filter (with optional decay)
+        half_life = self.store.config.confidence_half_life_days if use_confidence_decay else 0.0
         if min_confidence:
-            facts = [f for f in facts if f.confidence >= min_confidence]
+            facts = [
+                f for f in facts
+                if _effective_confidence(f, half_life) >= min_confidence
+            ]
 
         if not facts:
             return []
@@ -224,7 +230,7 @@ class MemorySearch:
                 # Merge BM25 score with confidence and recency
                 ranked.sort(key=lambda x: (
                     x[1] * 0.45
-                    + x[0].confidence * 0.2
+                    + _effective_confidence(x[0], half_life) * 0.2
                     + _recency_score(x[0]) * 0.15
                     + _frequency_score(x[0]) * 0.1
                     + _type_priority_score(x[0], query) * 0.1
@@ -234,8 +240,11 @@ class MemorySearch:
                 # Search with query but BM25 found nothing relevant — return empty
                 return []
         else:
-            # Simple sort: confidence first, then newest
-            facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+            # Simple sort: effective confidence first, then newest
+            facts.sort(key=lambda f: (
+                -_effective_confidence(f, half_life),
+                -f.created_at
+            ))
             facts = facts[:limit]
 
         return facts
@@ -250,6 +259,7 @@ class MemorySearch:
         scope: str = "",
         project: str = "",
         include_global: bool = False,
+        use_confidence_decay: bool = True,
     ) -> str:
         """Generate a compact summary for system prompt injection.
 
@@ -272,6 +282,7 @@ class MemorySearch:
             scope: Filter by scope (``global`` / ``project``).
             project: Filter by project name.
             include_global: When True and scope/project is set, also include global facts.
+            use_confidence_decay: Apply time-based decay to confidence (default: True).
 
         Returns:
             Formatted markdown string for system prompt injection, or empty string.
@@ -318,8 +329,9 @@ class MemorySearch:
         if not all_facts:
             return ""
 
-        # Step 4: Now apply confidence filter
-        facts = [f for f in all_facts if f.confidence >= min_confidence]
+        # Step 4: Now apply confidence filter (with optional decay)
+        half_life = self.store.config.confidence_half_life_days if use_confidence_decay else 0.0
+        facts = [f for f in all_facts if _effective_confidence(f, half_life) >= min_confidence]
 
         if not facts:
             return ""
@@ -333,17 +345,23 @@ class MemorySearch:
                 ranked = [(facts[i], s) for i, s in scored_indices]
                 ranked.sort(key=lambda x: (
                     x[1] * 0.45
-                    + x[0].confidence * 0.2
+                    + _effective_confidence(x[0], half_life) * 0.2
                     + _recency_score(x[0]) * 0.15
                     + _frequency_score(x[0]) * 0.1
                     + _type_priority_score(x[0], query) * 0.1
                 ), reverse=True)
                 facts = [r[0] for r in ranked[:limit]]
             else:
-                facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+                facts.sort(key=lambda f: (
+                    -_effective_confidence(f, half_life),
+                    -f.created_at
+                ))
                 facts = facts[:limit]
         else:
-            facts.sort(key=lambda f: (-f.confidence, -f.created_at))
+            facts.sort(key=lambda f: (
+                -_effective_confidence(f, half_life),
+                -f.created_at
+            ))
             facts = facts[:limit]
 
         lines = ["## Atomic Fact Summary"]
@@ -362,7 +380,7 @@ class MemorySearch:
             lines.append(f"- {emoji} {tag} {confidence_str} | {f.content}")
 
         summary = "\n".join(lines) + "\n"
-        summary += f"*({len(facts)} active facts, threshold ≥{int(min_confidence * 100)}% confidence)*\n"
+        summary += f"*({len(facts)} active facts, threshold ≥{int(min_confidence * 100)}% confidence, half-life {int(half_life)}d)*\n"
 
         return summary
 
@@ -682,6 +700,28 @@ def _recency_score(fact: AtomicFact) -> float:
     """Score 0.0-1.0 based on how recent a fact is (within last 90 days)."""
     age_days = (time.time() - fact.created_at) / 86400
     return max(0.0, 1.0 - age_days / 90.0)
+
+
+def _effective_confidence(fact: AtomicFact, half_life_days: float = 30.0) -> float:
+    """Apply time-based decay to a fact's raw confidence.
+
+    Formula:  effective = raw * (0.5) ^ (age_days / half_life_days)
+
+    A fact with raw confidence 0.9 and half-life 30d:
+      - Day 0:   0.900
+      - Day 30:  0.450  (one half-life)
+      - Day 60:  0.225  (two half-lives)
+      - Day 90:  0.112  (three half-lives)
+
+    Set half_life_days to 0 to disable decay (returns raw confidence).
+    """
+    if half_life_days <= 0:
+        return fact.confidence
+    age_days = (time.time() - fact.created_at) / 86400
+    if age_days <= 0:
+        return fact.confidence
+    decay = 0.5 ** (age_days / half_life_days)
+    return fact.confidence * decay
 
 
 def _frequency_score(fact: AtomicFact) -> float:

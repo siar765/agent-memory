@@ -216,6 +216,18 @@ class MemoryConfig:
     max_fact_length: int = 200
     """Maximum characters per atomic fact content."""
 
+    confidence_half_life_days: float = 30.0
+    """Half-life for confidence decay, in days.
+
+    A fact's *effective* confidence halves every N days since creation
+    unless re-observed.  This prevents stale facts from persisting in
+    the injection threshold filter.  Set to 0 to disable decay.
+
+    - 30d (default): a 60-day-old fact at raw 1.0 → effective ~0.25
+    - 90d: gentler decay, good for slowly-changing preferences
+    - 7d: aggressive decay, for fast-moving project context
+    """
+
     extract_timeout: int = 120
     """Timeout in seconds for LLM extraction calls."""
 
